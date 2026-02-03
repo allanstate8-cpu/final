@@ -36,14 +36,17 @@ let dbReady = false;
         setupBotHandlers();
         
         // ✅ SETUP WEBHOOK (This is the key fix!)
-        const webhookPath = `/telegram-webhook/${BOT_TOKEN}`;
+        const webhookPath = `/telegram-webhook`;
         const fullWebhookUrl = `${WEBHOOK_URL}${webhookPath}`;
         
         await bot.setWebHook(fullWebhookUrl);
         console.log(`🤖 Webhook set to: ${fullWebhookUrl}`);
         
-        // Setup webhook endpoint
-        app.use(bot.webhookCallback(webhookPath));
+        // Setup webhook endpoint - node-telegram-bot-api uses processUpdate
+        app.post(webhookPath, (req, res) => {
+            bot.processUpdate(req.body);
+            res.sendStatus(200);
+        });
         
     } catch (error) {
         console.error('❌ Initialization failed:', error);
@@ -672,7 +675,7 @@ app.get('/health', (req, res) => {
         database: dbReady ? 'connected' : 'not ready',
         activeAdmins: adminChatIds.size,
         botMode: 'webhook',
-        webhookUrl: `${WEBHOOK_URL}/telegram-webhook/${BOT_TOKEN}`,
+        webhookUrl: `${WEBHOOK_URL}/telegram-webhook`,
         timestamp: new Date().toISOString()
     });
 });
