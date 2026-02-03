@@ -79,6 +79,14 @@ app.post(webhookPath, (req, res) => {
         await bot.setWebHook(fullWebhookUrl);
         console.log(`🤖 Webhook set to: ${fullWebhookUrl}`);
         
+        // Test bot API connectivity
+        try {
+            const botInfo = await bot.getMe();
+            console.log(`✅ Bot connected: @${botInfo.username} (${botInfo.first_name})`);
+        } catch (botError) {
+            console.error('❌ Bot API error:', botError);
+        }
+        
     } catch (error) {
         console.error('❌ Initialization failed:', error);
         process.exit(1);
@@ -152,13 +160,20 @@ ${process.env.APP_URL || WEBHOOK_URL}?admin=${adminId}
                 await bot.sendMessage(chatId, '❌ Database error. Please try again.');
             }
         } else {
-            await bot.sendMessage(chatId, `
+            console.log(`📤 Sending welcome message to chat ${chatId}`);
+            try {
+                await bot.sendMessage(chatId, `
 👋 *Welcome!*
 
 Your Chat ID: \`${chatId}\`
 
 Provide this to your super admin for access.
             `, { parse_mode: 'Markdown' });
+                console.log(`✅ Message sent successfully to ${chatId}`);
+            } catch (sendError) {
+                console.error('❌ Error sending message:', sendError);
+                console.error('Stack:', sendError.stack);
+            }
         }
         } catch (error) {
             console.error('❌ Error in /start handler:', error);
