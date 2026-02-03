@@ -33,8 +33,17 @@ app.use(express.static(__dirname));
 const webhookPath = `/telegram-webhook`;
 app.post(webhookPath, (req, res) => {
     try {
+        console.log('📥 Webhook received:', JSON.stringify(req.body).substring(0, 100));
+        
         if (req.body && Object.keys(req.body).length > 0) {
-            bot.processUpdate(req.body);
+            // Only process if it has update_id (valid Telegram update)
+            if (req.body.update_id !== undefined) {
+                bot.processUpdate(req.body);
+            } else {
+                console.log('⚠️ Received webhook without update_id, ignoring');
+            }
+        } else {
+            console.log('⚠️ Empty webhook body');
         }
         res.sendStatus(200);
     } catch (error) {
