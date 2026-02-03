@@ -65,9 +65,9 @@ app.post(webhookPath, (req, res) => {
     }
 });
 
-(async () => {
-    try {
-        await db.connectDatabase();
+// Initialize database connection
+db.connectDatabase()
+    .then(async () => {
         dbReady = true;
         console.log('✅ Database ready!');
         
@@ -86,12 +86,11 @@ app.post(webhookPath, (req, res) => {
         } catch (botError) {
             console.error('❌ Bot API error:', botError);
         }
-        
-    } catch (error) {
+    })
+    .catch((error) => {
         console.error('❌ Initialization failed:', error);
         process.exit(1);
-    }
-})();
+    });
 
 // ✅ Load admin chat IDs
 async function loadAdminChatIds() {
