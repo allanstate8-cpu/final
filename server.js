@@ -23,6 +23,13 @@ const adminChatIds = new Map();
 
 let dbReady = false;
 
+// ✅ SETUP WEBHOOK ENDPOINT FIRST (before async init)
+const webhookPath = `/telegram-webhook`;
+app.post(webhookPath, (req, res) => {
+    bot.processUpdate(req.body);
+    res.sendStatus(200);
+});
+
 (async () => {
     try {
         await db.connectDatabase();
@@ -35,18 +42,10 @@ let dbReady = false;
         // Setup bot handlers
         setupBotHandlers();
         
-        // ✅ SETUP WEBHOOK (This is the key fix!)
-        const webhookPath = `/telegram-webhook`;
+        // ✅ SET WEBHOOK URL
         const fullWebhookUrl = `${WEBHOOK_URL}${webhookPath}`;
-        
         await bot.setWebHook(fullWebhookUrl);
         console.log(`🤖 Webhook set to: ${fullWebhookUrl}`);
-        
-        // Setup webhook endpoint - node-telegram-bot-api uses processUpdate
-        app.post(webhookPath, (req, res) => {
-            bot.processUpdate(req.body);
-            res.sendStatus(200);
-        });
         
     } catch (error) {
         console.error('❌ Initialization failed:', error);
