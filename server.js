@@ -8,15 +8,18 @@ const db = require('./database');
 const app = express();
 
 // ==========================================
-// ✅ SINGLE BOT ARCHITECTURE - NO MORE ETELEGRAM!
+// ✅ WEBHOOK MODE FOR RENDER (NOT POLLING!)
 // ==========================================
 
-// ✅ ONE BOT FOR ALL ADMINS - This is the key fix!
 const BOT_TOKEN = process.env.SUPER_ADMIN_BOT_TOKEN;
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+const PORT = process.env.PORT || 10000;
+const WEBHOOK_URL = process.env.RENDER_EXTERNAL_URL || `https://final-8xfd.onrender.com`;
 
-// Store admin chat IDs (NOT separate bot instances!)
-const adminChatIds = new Map(); // adminId => chatId
+// ✅ Create bot WITHOUT polling
+const bot = new TelegramBot(BOT_TOKEN);
+
+// Store admin chat IDs
+const adminChatIds = new Map();
 
 let dbReady = false;
 
@@ -32,13 +35,23 @@ let dbReady = false;
         // Setup bot handlers
         setupBotHandlers();
         
+        // ✅ SETUP WEBHOOK (This is the key fix!)
+        const webhookPath = `/telegram-webhook/${BOT_TOKEN}`;
+        const fullWebhookUrl = `${WEBHOOK_URL}${webhookPath}`;
+        
+        await bot.setWebHook(fullWebhookUrl);
+        console.log(`🤖 Webhook set to: ${fullWebhookUrl}`);
+        
+        // Setup webhook endpoint
+        app.use(bot.webhookCallback(webhookPath));
+        
     } catch (error) {
-        console.error('❌ Database initialization failed:', error);
+        console.error('❌ Initialization failed:', error);
         process.exit(1);
     }
 })();
 
-// ✅ Load admin chat IDs (NOT creating separate bots!)
+// ✅ Load admin chat IDs
 async function loadAdminChatIds() {
     const admins = await db.getAllAdmins();
     console.log(`📋 Loading ${admins.length} admins...`);
@@ -68,7 +81,7 @@ app.use((req, res, next) => {
 });
 
 // ==========================================
-// ✅ SINGLE BOT HANDLERS
+// ✅ BOT HANDLERS
 // ==========================================
 
 function setupBotHandlers() {
@@ -92,7 +105,7 @@ function setupBotHandlers() {
 
 *Your Admin ID:* \`${adminId}\`
 *Your Personal Link:*
-${process.env.APP_URL || 'http://localhost:3000'}?admin=${adminId}
+${process.env.APP_URL || WEBHOOK_URL}?admin=${adminId}
 
 *Commands:*
 /mylink - Get your link
@@ -125,7 +138,7 @@ Provide this to your super admin for access.
         bot.sendMessage(chatId, `
 🔗 *YOUR LINK*
 
-\`${process.env.APP_URL || 'http://localhost:3000'}?admin=${adminId}\`
+\`${process.env.APP_URL || WEBHOOK_URL}?admin=${adminId}\`
 
 📋 Applications → *${admin.name}*
         `, { parse_mode: 'Markdown' });
@@ -214,7 +227,7 @@ Provide this to your super admin for access.
 📅 ${new Date(admin.createdAt).toLocaleString()}
 ✅ ${admin.status}
 
-🔗 ${process.env.APP_URL || 'http://localhost:3000'}?admin=${adminId}
+🔗 ${process.env.APP_URL || WEBHOOK_URL}?admin=${adminId}
         `, { parse_mode: 'Markdown' });
     });
 
@@ -223,10 +236,7 @@ Provide this to your super admin for access.
         await handleCallback(callbackQuery);
     });
 
-    // Error handling
-    bot.on('polling_error', (error) => {
-        console.error('❌ Polling error:', error.code, error.message);
-    });
+    console.log('✅ Bot handlers configured!');
 }
 
 // Helper to get adminId from chatId
@@ -661,7 +671,8 @@ app.get('/health', (req, res) => {
         status: 'ok', 
         database: dbReady ? 'connected' : 'not ready',
         activeAdmins: adminChatIds.size,
-        botMode: 'single-instance',
+        botMode: 'webhook',
+        webhookUrl: `${WEBHOOK_URL}/telegram-webhook/${BOT_TOKEN}`,
         timestamp: new Date().toISOString()
     });
 });
@@ -678,19 +689,18 @@ app.get('/', (req, res) => {
 // SERVER
 // ==========================================
 
-const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`\n👑 MULTI-ADMIN LOAN PLATFORM`);
     console.log(`============================`);
     console.log(`🌐 Server: http://localhost:${PORT}`);
-    console.log(`🤖 Bot: SINGLE INSTANCE ✅`);
+    console.log(`🤖 Bot: WEBHOOK MODE ✅`);
     console.log(`👥 Admins: ${adminChatIds.size}`);
     console.log(`\n✅ Ready!\n`);
 });
 
 async function shutdownGracefully() {
     console.log('🛑 Shutting down...');
-    await bot.stopPolling();
+    await bot.deleteWebHook();
     await db.closeDatabase();
     console.log('✅ Done');
     process.exit(0);
