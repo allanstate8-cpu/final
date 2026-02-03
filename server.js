@@ -86,10 +86,61 @@ db.connectDatabase()
         // Load admin chat IDs from database
         await loadAdminChatIds();
         
-        // ✅ SET WEBHOOK URL
+        // ✅ SET WEBHOOK URL - WITH RETRY LOGIC
         const fullWebhookUrl = `${WEBHOOK_URL}${webhookPath}`;
-        await bot.setWebHook(fullWebhookUrl);
-        console.log(`🤖 Webhook set to: ${fullWebhookUrl}`);
+        
+        let webhookSetSuccessfully = false;
+        let attempts = 0;
+        const maxAttempts = 3;
+        
+        while (!webhookSetSuccessfully && attempts < maxAttempts) {
+            attempts++;
+            try {
+                console.log(`🔄 Attempt ${attempts}/${maxAttempts}: Setting webhook to: ${fullWebhookUrl}`);
+                
+                // Delete any existing webhook first
+                await bot.deleteWebHook();
+                console.log('🗑️ Cleared any existing webhook');
+                
+                // Wait a bit
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                
+                // Set the new webhook
+                const result = await bot.setWebHook(fullWebhookUrl, {
+                    drop_pending_updates: false,
+                    max_connections: 40,
+                    allowed_updates: ['message', 'callback_query']
+                });
+                
+                if (result) {
+                    console.log('✅ setWebHook returned true');
+                    
+                    // Verify it was actually set
+                    const info = await bot.getWebHookInfo();
+                    console.log('📋 Webhook info:', JSON.stringify(info, null, 2));
+                    
+                    if (info.url === fullWebhookUrl) {
+                        webhookSetSuccessfully = true;
+                        console.log(`✅ Webhook CONFIRMED set to: ${fullWebhookUrl}`);
+                    } else {
+                        console.error(`❌ Webhook URL mismatch! Expected: ${fullWebhookUrl}, Got: ${info.url}`);
+                    }
+                } else {
+                    console.error('❌ setWebHook returned false');
+                }
+            } catch (webhookError) {
+                console.error(`❌ Webhook setup error (attempt ${attempts}):`, webhookError.message);
+                if (attempts < maxAttempts) {
+                    console.log('⏳ Waiting 2 seconds before retry...');
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                }
+            }
+        }
+        
+        if (!webhookSetSuccessfully) {
+            console.error('❌❌❌ CRITICAL: Failed to set webhook after all attempts!');
+            console.error('Bot will NOT receive updates!');
+        }
         
         // Test bot API connectivity
         try {
@@ -104,15 +155,31 @@ db.connectDatabase()
             console.log(`💓 Keep-alive: Server running, ${adminChatIds.size} admins connected`);
         }, 60000); // Every 60 seconds
         
-        // Periodic webhook health check
+        // Periodic webhook health check - more frequent and with auto-fix
         setInterval(async () => {
             try {
                 const info = await bot.getWebHookInfo();
-                console.log(`🔍 Webhook status: ${info.url ? 'SET' : 'NOT SET'} | Pending: ${info.pending_update_count || 0}`);
+                const isSet = info.url === fullWebhookUrl;
+                console.log(`🔍 Webhook: ${isSet ? '✅ SET' : '❌ NOT SET'} | Pending: ${info.pending_update_count || 0}`);
+                
+                // Auto-fix if webhook is not set
+                if (!isSet) {
+                    console.log('⚠️ Webhook not set! Attempting to fix...');
+                    try {
+                        await bot.setWebHook(fullWebhookUrl, {
+                            drop_pending_updates: false,
+                            max_connections: 40,
+                            allowed_updates: ['message', 'callback_query']
+                        });
+                        console.log('✅ Webhook re-set successfully');
+                    } catch (fixError) {
+                        console.error('❌ Failed to re-set webhook:', fixError.message);
+                    }
+                }
             } catch (error) {
                 console.error('⚠️ Webhook check error:', error.message);
             }
-        }, 300000); // Every 5 minutes
+        }, 60000); // Every 1 minute (more frequent)
         
         console.log('✅ System fully initialized and running!');
     })
