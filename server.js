@@ -188,27 +188,36 @@ db.connectDatabase()
         process.exit(1);
     });
 
-// ✅ Load admin chat IDs
+// ✅ Load admin chat IDs - IMPROVED WITH BETTER LOGGING
 async function loadAdminChatIds() {
-    const admins = await db.getAllAdmins();
-    console.log(`📋 Loading ${admins.length} admins...`);
-    
-    for (const admin of admins) {
-        console.log(`   Admin: ${admin.name}`);
-        console.log(`   - adminId: ${admin.adminId}`);
-        console.log(`   - chatId: ${admin.chatId} (type: ${typeof admin.chatId})`);
-        console.log(`   - status: ${admin.status}`);
+    try {
+        const admins = await db.getAllAdmins();
+        console.log(`📋 Loading ${admins.length} admins from database...`);
         
-        if (admin.status === 'active' && admin.chatId) {
-            adminChatIds.set(admin.adminId, admin.chatId);
-            console.log(`✅ Loaded: ${admin.name} (${admin.adminId}) -> chatId: ${admin.chatId}`);
-        } else {
-            console.log(`⚠️ Skipped: ${admin.name} - Missing chatId or inactive`);
+        adminChatIds.clear(); // Clear existing map
+        
+        for (const admin of admins) {
+            console.log(`\n   Processing Admin: ${admin.name}`);
+            console.log(`   - adminId: ${admin.adminId}`);
+            console.log(`   - chatId: ${admin.chatId} (type: ${typeof admin.chatId})`);
+            console.log(`   - status: ${admin.status}`);
+            
+            if (admin.status === 'active' && admin.chatId) {
+                adminChatIds.set(admin.adminId, admin.chatId);
+                console.log(`   ✅ LOADED into map`);
+            } else {
+                console.log(`   ⚠️ SKIPPED - Missing chatId or inactive`);
+            }
         }
+        
+        console.log(`\n✅ ${adminChatIds.size} admins loaded and ready!`);
+        console.log(`📋 adminChatIds map contents:`);
+        for (const [id, chatId] of adminChatIds.entries()) {
+            console.log(`   ${id} -> ${chatId}`);
+        }
+    } catch (error) {
+        console.error('❌ Error loading admin chat IDs:', error);
     }
-    
-    console.log(`✅ ${adminChatIds.size} admins ready!`);
-    console.log(`📋 adminChatIds contents:`, Array.from(adminChatIds.entries()));
 }
 
 // ==========================================
@@ -440,7 +449,7 @@ Please send admin details in this format:
         }
     });
 
-    // Add admin with details
+    // Add admin with details - ✅ FULLY FIXED VERSION
     bot.onText(/\/addadmin (.+)/, async (msg, match) => {
         const chatId = msg.chat.id;
         const adminId = getAdminIdByChatId(chatId);
@@ -468,13 +477,19 @@ Please send admin details in this format:
                 return;
             }
             
+            console.log(`\n🔵 ===== ADDING NEW ADMIN =====`);
+            console.log(`Name: ${name}`);
+            console.log(`Email: ${email}`);
+            console.log(`Chat ID: ${newChatId}`);
+            
             // Generate new admin ID
             const allAdmins = await db.getAllAdmins();
             const newAdminId = `ADMIN${String(allAdmins.length + 1).padStart(3, '0')}`;
+            console.log(`Generated Admin ID: ${newAdminId}`);
             
-            // Create new admin
+            // Create new admin object
             const newAdmin = {
-                adminId: newAdminId,
+                adminId: newAdminId,  // ✅ Using adminId (works with updated database.js)
                 chatId: newChatId,
                 name: name,
                 email: email,
@@ -482,11 +497,19 @@ Please send admin details in this format:
                 createdAt: new Date()
             };
             
+            console.log(`💾 Saving to database...`);
+            // Save to database
             await db.saveAdmin(newAdmin);
+            console.log(`✅ Admin saved to database: ${newAdminId}`);
             
             // ✅ CRITICAL FIX: Add to active map immediately
             adminChatIds.set(newAdminId, newChatId);
             console.log(`✅ Admin added to active map: ${newAdminId} -> ${newChatId}`);
+            console.log(`📊 Total admins in map now: ${adminChatIds.size}`);
+            console.log(`📋 Current map contents:`);
+            for (const [id, chatId] of adminChatIds.entries()) {
+                console.log(`   ${id} -> ${chatId}`);
+            }
             
             await bot.sendMessage(chatId, `
 ✅ *ADMIN ADDED*
@@ -506,6 +529,7 @@ They can use /start to see their commands!
             
             // Notify the new admin
             try {
+                console.log(`📤 Sending notification to new admin at chat ${newChatId}...`);
                 await bot.sendMessage(newChatId, `
 🎉 *YOU'RE NOW AN ADMIN!*
 
@@ -523,13 +547,17 @@ ${process.env.APP_URL || WEBHOOK_URL}?admin=${newAdminId}
 
 ✅ You're connected and ready to receive loan applications!
                 `, { parse_mode: 'Markdown' });
+                console.log(`✅ Notification sent to new admin`);
             } catch (notifyError) {
                 console.error('Could not notify new admin:', notifyError);
                 await bot.sendMessage(chatId, '⚠️ Admin added but could not send notification. They need to /start the bot first.');
             }
             
+            console.log(`🔵 ===== ADMIN ADDITION COMPLETE =====\n`);
+            
         } catch (error) {
             console.error('❌ Error adding admin:', error);
+            console.error('Stack:', error.stack);
             await bot.sendMessage(chatId, '❌ Failed to add admin. Error: ' + error.message);
         }
     });
@@ -553,11 +581,16 @@ bot.on('callback_query', async (callbackQuery) => {
     console.log(`   Time: ${new Date().toISOString()}`);
     console.log(`   Admin: ${adminId || 'UNAUTHORIZED'}`);
     console.log(`   Chat: ${chatId}`);
+    console.log(`   Map has admin: ${adminChatIds.has(adminId)}`);
     console.log(`🔘 ======================================\n`);
     
     // Check authorization
     if (!adminId) {
         console.log(`❌ UNAUTHORIZED callback from chat ${chatId}`);
+        console.log(`📋 Current admins in map:`);
+        for (const [id, storedChatId] of adminChatIds.entries()) {
+            console.log(`   ${id} -> ${storedChatId}`);
+        }
         await bot.answerCallbackQuery(callbackQuery.id, {
             text: '❌ Not authorized!',
             show_alert: true
@@ -827,8 +860,6 @@ async function sendToAdmin(adminId, message, options = {}) {
     }
 }
 
-// ==========================================
-// ==========================================
 // ==========================================
 // MIDDLEWARE - Database ready check
 // ==========================================
