@@ -83,8 +83,15 @@ async function closeDatabase() {
  */
 async function saveAdmin(adminData) {
     try {
+        // ✅ FIXED: Accept both adminId and id properties
+        const adminId = adminData.adminId || adminData.id;
+        
+        if (!adminId) {
+            throw new Error('Admin ID is required (adminId or id property)');
+        }
+        
         const result = await db.collection(COLLECTIONS.ADMINS).insertOne({
-            adminId: adminData.id,
+            adminId: adminId,
             name: adminData.name,
             email: adminData.email,
             botToken: adminData.botToken,
@@ -93,7 +100,7 @@ async function saveAdmin(adminData) {
             createdAt: adminData.createdAt || new Date().toISOString()
         });
         
-        console.log(`💾 Admin saved: ${adminData.id} (${adminData.name})`);
+        console.log(`💾 Admin saved: ${adminId} (${adminData.name})`);
         return result;
     } catch (error) {
         console.error('❌ Error saving admin:', error);
