@@ -86,6 +86,13 @@ db.connectDatabase()
         } catch (botError) {
             console.error('❌ Bot API error:', botError);
         }
+        
+        // Keep-alive mechanism to prevent premature exit
+        setInterval(() => {
+            // This keeps the event loop active
+        }, 60000); // Every 60 seconds
+        
+        console.log('✅ System fully initialized and running!');
     })
     .catch((error) => {
         console.error('❌ Initialization failed:', error);
