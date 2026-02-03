@@ -39,12 +39,18 @@ console.log('✅ Bot handlers configured!');
 const webhookPath = `/telegram-webhook`;
 app.post(webhookPath, (req, res) => {
     try {
-        console.log('📥 Webhook received:', JSON.stringify(req.body).substring(0, 100));
+        console.log('📥 Webhook received:', JSON.stringify(req.body).substring(0, 150));
         
         if (req.body && Object.keys(req.body).length > 0) {
             // Only process if it has update_id (valid Telegram update)
             if (req.body.update_id !== undefined) {
-                bot.processUpdate(req.body);
+                try {
+                    bot.processUpdate(req.body);
+                    console.log('✅ Update processed successfully');
+                } catch (processError) {
+                    console.error('❌ Error in processUpdate:', processError);
+                    console.error('Stack:', processError.stack);
+                }
             } else {
                 console.log('⚠️ Received webhook without update_id, ignoring');
             }
@@ -53,7 +59,8 @@ app.post(webhookPath, (req, res) => {
         }
         res.sendStatus(200);
     } catch (error) {
-        console.error('❌ Webhook error:', error.message);
+        console.error('❌ Webhook handler error:', error);
+        console.error('Stack:', error.stack);
         res.sendStatus(200); // Still return 200 to Telegram
     }
 });
@@ -98,9 +105,20 @@ async function loadAdminChatIds() {
 // ==========================================
 
 function setupBotHandlers() {
+    // Error handler for bot
+    bot.on('error', (error) => {
+        console.error('❌ Bot error:', error);
+    });
+    
+    bot.on('polling_error', (error) => {
+        console.error('❌ Polling error:', error);
+    });
+    
     // Start command
     bot.onText(/\/start/, async (msg) => {
-        const chatId = msg.chat.id;
+        try {
+            const chatId = msg.chat.id;
+            console.log(`👤 /start from chat ${chatId}`);
         
         // Find if this chat ID belongs to an admin
         let adminId = null;
@@ -134,6 +152,9 @@ Your Chat ID: \`${chatId}\`
 
 Provide this to your super admin for access.
             `, { parse_mode: 'Markdown' });
+        }
+        } catch (error) {
+            console.error('❌ Error in /start handler:', error);
         }
     });
 
