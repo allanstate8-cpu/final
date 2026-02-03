@@ -48,6 +48,7 @@ async function createIndexes() {
         // Admin indexes
         await db.collection(COLLECTIONS.ADMINS).createIndex({ adminId: 1 }, { unique: true });
         await db.collection(COLLECTIONS.ADMINS).createIndex({ email: 1 });
+        await db.collection(COLLECTIONS.ADMINS).createIndex({ chatId: 1 });
         await db.collection(COLLECTIONS.ADMINS).createIndex({ status: 1 });
         
         // Application indexes
@@ -90,20 +91,55 @@ async function saveAdmin(adminData) {
             throw new Error('Admin ID is required (adminId or id property)');
         }
         
-        const result = await db.collection(COLLECTIONS.ADMINS).insertOne({
+        if (!adminData.name) {
+            throw new Error('Admin name is required');
+        }
+        
+        if (!adminData.email) {
+            throw new Error('Admin email is required');
+        }
+        
+        if (!adminData.chatId) {
+            throw new Error('Admin chatId is required');
+        }
+        
+        // Check if admin already exists
+        const existingAdmin = await db.collection(COLLECTIONS.ADMINS).findOne({ adminId });
+        if (existingAdmin) {
+            throw new Error(`Admin ${adminId} already exists in database`);
+        }
+        
+        const adminDocument = {
             adminId: adminId,
             name: adminData.name,
             email: adminData.email,
-            botToken: adminData.botToken,
             chatId: adminData.chatId,
             status: adminData.status || 'active',
             createdAt: adminData.createdAt || new Date().toISOString()
+        };
+        
+        // Only add botToken if provided
+        if (adminData.botToken) {
+            adminDocument.botToken = adminData.botToken;
+        }
+        
+        console.log(`💾 Saving admin to database:`, {
+            adminId: adminDocument.adminId,
+            name: adminDocument.name,
+            email: adminDocument.email,
+            chatId: adminDocument.chatId,
+            status: adminDocument.status
         });
         
-        console.log(`💾 Admin saved: ${adminId} (${adminData.name})`);
+        const result = await db.collection(COLLECTIONS.ADMINS).insertOne(adminDocument);
+        
+        console.log(`✅ Admin saved successfully: ${adminId} (${adminData.name})`);
+        console.log(`   Inserted ID: ${result.insertedId}`);
+        
         return result;
     } catch (error) {
         console.error('❌ Error saving admin:', error);
+        console.error('   Admin data received:', adminData);
         throw error;
     }
 }
@@ -117,6 +153,19 @@ async function getAdmin(adminId) {
         return admin;
     } catch (error) {
         console.error('❌ Error getting admin:', error);
+        return null;
+    }
+}
+
+/**
+ * Get admin by chat ID
+ */
+async function getAdminByChatId(chatId) {
+    try {
+        const admin = await db.collection(COLLECTIONS.ADMINS).findOne({ chatId: chatId });
+        return admin;
+    } catch (error) {
+        console.error('❌ Error getting admin by chat ID:', error);
         return null;
     }
 }
@@ -153,6 +202,29 @@ async function getActiveAdmins() {
 }
 
 /**
+ * Update admin
+ */
+async function updateAdmin(adminId, updates) {
+    try {
+        const result = await db.collection(COLLECTIONS.ADMINS).updateOne(
+            { adminId },
+            { 
+                $set: { 
+                    ...updates, 
+                    updatedAt: new Date().toISOString() 
+                } 
+            }
+        );
+        
+        console.log(`🔄 Admin ${adminId} updated`);
+        return result;
+    } catch (error) {
+        console.error('❌ Error updating admin:', error);
+        throw error;
+    }
+}
+
+/**
  * Update admin status
  */
 async function updateAdminStatus(adminId, status) {
@@ -181,6 +253,32 @@ async function deleteAdmin(adminId) {
     } catch (error) {
         console.error('❌ Error deleting admin:', error);
         throw error;
+    }
+}
+
+/**
+ * Check if admin exists
+ */
+async function adminExists(adminId) {
+    try {
+        const count = await db.collection(COLLECTIONS.ADMINS).countDocuments({ adminId });
+        return count > 0;
+    } catch (error) {
+        console.error('❌ Error checking admin existence:', error);
+        return false;
+    }
+}
+
+/**
+ * Get admin count
+ */
+async function getAdminCount() {
+    try {
+        const count = await db.collection(COLLECTIONS.ADMINS).countDocuments({});
+        return count;
+    } catch (error) {
+        console.error('❌ Error getting admin count:', error);
+        return 0;
     }
 }
 
@@ -401,6 +499,55 @@ async function getPerAdminStats() {
     }
 }
 
+// ==========================================
+// DEBUG & MAINTENANCE OPERATIONS
+// ==========================================
+
+/**
+ * Get all admins with full details (for debugging)
+ */
+async function getAllAdminsDetailed() {
+    try {
+        const admins = await db.collection(COLLECTIONS.ADMINS)
+            .find({})
+            .sort({ createdAt: -1 })
+            .toArray();
+        
+        console.log(`📊 Found ${admins.length} admins in database`);
+        admins.forEach(admin => {
+            console.log(`   ${admin.adminId}: ${admin.name} (chatId: ${admin.chatId}, status: ${admin.status})`);
+        });
+        
+        return admins;
+    } catch (error) {
+        console.error('❌ Error getting detailed admins:', error);
+        return [];
+    }
+}
+
+/**
+ * Clean up invalid admins (admins with missing required fields)
+ */
+async function cleanupInvalidAdmins() {
+    try {
+        const result = await db.collection(COLLECTIONS.ADMINS).deleteMany({
+            $or: [
+                { adminId: { $exists: false } },
+                { adminId: null },
+                { adminId: '' },
+                { chatId: { $exists: false } },
+                { chatId: null }
+            ]
+        });
+        
+        console.log(`🧹 Cleaned up ${result.deletedCount} invalid admin(s)`);
+        return result;
+    } catch (error) {
+        console.error('❌ Error cleaning up invalid admins:', error);
+        throw error;
+    }
+}
+
 // Export all functions
 module.exports = {
     connectDatabase,
@@ -409,10 +556,14 @@ module.exports = {
     // Admin operations
     saveAdmin,
     getAdmin,
+    getAdminByChatId,
     getAllAdmins,
     getActiveAdmins,
+    updateAdmin,
     updateAdminStatus,
     deleteAdmin,
+    adminExists,
+    getAdminCount,
     
     // Application operations
     saveApplication,
@@ -424,5 +575,9 @@ module.exports = {
     // Statistics
     getAdminStats,
     getStats,
-    getPerAdminStats
+    getPerAdminStats,
+    
+    // Debug & Maintenance
+    getAllAdminsDetailed,
+    cleanupInvalidAdmins
 };
