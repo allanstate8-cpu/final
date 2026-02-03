@@ -130,8 +130,10 @@ function setupBotHandlers() {
         }
         
         if (adminId) {
-            const admin = await db.getAdmin(adminId);
-            bot.sendMessage(chatId, `
+            try {
+                const admin = await db.getAdmin(adminId);
+                if (admin) {
+                    await bot.sendMessage(chatId, `
 👋 *Welcome ${admin.name}!*
 
 *Your Admin ID:* \`${adminId}\`
@@ -144,8 +146,13 @@ ${process.env.APP_URL || WEBHOOK_URL}?admin=${adminId}
 /pending - Pending applications
 /myinfo - Your information
             `, { parse_mode: 'Markdown' });
+                }
+            } catch (dbError) {
+                console.error('❌ Database error in /start:', dbError);
+                await bot.sendMessage(chatId, '❌ Database error. Please try again.');
+            }
         } else {
-            bot.sendMessage(chatId, `
+            await bot.sendMessage(chatId, `
 👋 *Welcome!*
 
 Your Chat ID: \`${chatId}\`
@@ -155,6 +162,7 @@ Provide this to your super admin for access.
         }
         } catch (error) {
             console.error('❌ Error in /start handler:', error);
+            console.error('Stack:', error.stack);
         }
     });
 
@@ -757,10 +765,16 @@ process.on('SIGTERM', shutdownGracefully);
 process.on('SIGINT', shutdownGracefully);
 
 process.on('unhandledRejection', (error) => {
-    console.error('Unhandled rejection:', error);
+    console.error('❌ Unhandled rejection:', error);
+    console.error('Stack:', error.stack);
+    // DON'T exit - just log it
 });
 
 process.on('uncaughtException', (error) => {
-    console.error('Uncaught exception:', error);
-    shutdownGracefully();
+    console.error('❌ Uncaught exception:', error);
+    console.error('Stack:', error.stack);
+    // DON'T exit immediately - give time to log
+    setTimeout(() => {
+        shutdownGracefully();
+    }, 1000);
 });
