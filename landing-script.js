@@ -1,4 +1,4 @@
-// Landing Page Calculator Script with Admin ID Capture
+// Landing Page Calculator Script with Enhanced Admin ID Capture
 document.addEventListener('DOMContentLoaded', function() {
     // ========================================
     // ✅ CRITICAL: CAPTURE ADMIN ID FROM URL
@@ -6,15 +6,25 @@ document.addEventListener('DOMContentLoaded', function() {
     const urlParams = new URLSearchParams(window.location.search);
     const adminId = urlParams.get('admin');
     
-    if (adminId) {
-        // Store admin ID in sessionStorage for use throughout the application
+    // Enhanced admin ID validation and storage
+    if (adminId && adminId !== '' && adminId !== 'undefined' && adminId !== 'null') {
+        // Store admin ID in both sessionStorage and localStorage for redundancy
         sessionStorage.setItem('selectedAdminId', adminId);
+        localStorage.setItem('selectedAdminId', adminId);
         console.log('✅ Admin ID captured from URL:', adminId);
-        console.log('✅ Stored in sessionStorage');
+        console.log('✅ Stored in sessionStorage and localStorage');
+        
+        // Visual confirmation (optional - you can remove this)
+        console.log('%c🎯 ADMIN ASSIGNED: ' + adminId, 'background: #4CAF50; color: white; padding: 5px 10px; border-radius: 3px; font-weight: bold;');
     } else {
         console.log('⚠️ No admin ID in URL - will use auto-assignment');
-        // Clear any previous admin ID
-        sessionStorage.removeItem('selectedAdminId');
+        // Don't clear existing admin ID - user might be navigating within the app
+        // Only clear if explicitly no admin parameter
+        if (window.location.search && !adminId) {
+            console.log('🔄 Clearing previous admin assignment');
+            sessionStorage.removeItem('selectedAdminId');
+            localStorage.removeItem('selectedAdminId');
+        }
     }
     
     // ========================================
@@ -93,29 +103,110 @@ document.addEventListener('DOMContentLoaded', function() {
     // ========================================
     // ✅ APPLY NOW BUTTON HANDLER
     // ========================================
-    // If you have an "Apply Now" button, capture the click
     const applyButtons = document.querySelectorAll('.apply-btn, .cta-button, [href="application.html"]');
     
     applyButtons.forEach(button => {
         button.addEventListener('click', function(e) {
+            // Get the stored admin ID (check both storages)
+            const storedAdminId = sessionStorage.getItem('selectedAdminId') || 
+                                 localStorage.getItem('selectedAdminId');
+            
             // Generate application ID
             const applicationId = 'APP-' + Date.now();
             
-            // Store application data
+            // Store comprehensive application data
             const applicationData = {
                 applicationId: applicationId,
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
+                adminId: storedAdminId,
+                createdAt: new Date().toLocaleString('en-US', { timeZone: 'Africa/Dar_es_Salaam' })
             };
             
+            // Store in sessionStorage
             sessionStorage.setItem('applicationData', JSON.stringify(applicationData));
             
-            // Log for debugging
+            // Also backup in localStorage
+            localStorage.setItem('lastApplicationData', JSON.stringify(applicationData));
+            
+            // Enhanced logging
             console.log('📋 Application created:', applicationId);
-            if (adminId) {
-                console.log('👤 Will be assigned to admin:', adminId);
+            console.log('📅 Timestamp:', applicationData.timestamp);
+            
+            if (storedAdminId) {
+                console.log('👤 Assigned to admin:', storedAdminId);
+                console.log('%c✅ ADMIN ASSIGNMENT CONFIRMED', 'background: #2196F3; color: white; padding: 5px 10px; border-radius: 3px; font-weight: bold;');
             } else {
-                console.log('👤 Will be auto-assigned to available admin');
+                console.log('👤 Will be auto-assigned by server');
+                console.log('%c⚠️ AUTO-ASSIGNMENT MODE', 'background: #FF9800; color: white; padding: 5px 10px; border-radius: 3px; font-weight: bold;');
             }
         });
     });
+    
+    // ========================================
+    // DEBUG INFO ON PAGE LOAD
+    // ========================================
+    const currentAdminId = sessionStorage.getItem('selectedAdminId') || 
+                          localStorage.getItem('selectedAdminId');
+    
+    console.log('═══════════════════════════════════════');
+    console.log('🏦 LANDING PAGE INITIALIZED');
+    console.log('═══════════════════════════════════════');
+    console.log('📍 Current URL:', window.location.href);
+    console.log('🔗 Query String:', window.location.search);
+    console.log('👤 Admin ID from URL:', adminId || 'NONE');
+    console.log('💾 Stored Admin ID:', currentAdminId || 'NONE');
+    
+    if (currentAdminId) {
+        console.log('%c🎯 ACTIVE ASSIGNMENT: ' + currentAdminId, 'background: #4CAF50; color: white; padding: 5px 10px; border-radius: 3px; font-weight: bold;');
+    } else {
+        console.log('%c⚠️ NO ASSIGNMENT - WILL AUTO-ASSIGN', 'background: #FF9800; color: white; padding: 5px 10px; border-radius: 3px; font-weight: bold;');
+    }
+    console.log('═══════════════════════════════════════');
+    
+    // ========================================
+    // ADMIN LINK VERIFICATION
+    // ========================================
+    // This helps you verify the links are working correctly
+    if (adminId) {
+        // Create a small visual indicator (optional - can be removed)
+        const indicator = document.createElement('div');
+        indicator.style.cssText = `
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: bold;
+            z-index: 9999;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            animation: fadeIn 0.3s ease-in;
+        `;
+        indicator.textContent = '✅ Admin: ' + adminId;
+        
+        // Add to page
+        document.body.appendChild(indicator);
+        
+        // Remove after 5 seconds
+        setTimeout(() => {
+            indicator.style.animation = 'fadeOut 0.3s ease-out';
+            setTimeout(() => indicator.remove(), 300);
+        }, 5000);
+        
+        // Add simple CSS animations
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes fadeIn {
+                from { opacity: 0; transform: translateY(20px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+            @keyframes fadeOut {
+                from { opacity: 1; transform: translateY(0); }
+                to { opacity: 0; transform: translateY(20px); }
+            }
+        `;
+        document.head.appendChild(style);
+    }
 });
