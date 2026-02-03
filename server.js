@@ -124,24 +124,39 @@ function setupBotHandlers() {
     
     // Start command
     bot.onText(/\/start/, async (msg) => {
+        const chatId = msg.chat.id;
+        console.log(`\n========================================`);
+        console.log(`👤 /start command received`);
+        console.log(`Chat ID: ${chatId}`);
+        console.log(`From: ${msg.from.first_name} ${msg.from.last_name || ''}`);
+        console.log(`========================================\n`);
+        
         try {
-            const chatId = msg.chat.id;
-            console.log(`👤 /start from chat ${chatId}`);
-        
-        // Find if this chat ID belongs to an admin
-        let adminId = null;
-        for (const [id, storedChatId] of adminChatIds.entries()) {
-            if (storedChatId === chatId) {
-                adminId = id;
-                break;
+            // Find if this chat ID belongs to an admin
+            console.log(`🔍 Checking if chat ${chatId} belongs to an admin...`);
+            console.log(`📋 Current adminChatIds map size: ${adminChatIds.size}`);
+            
+            let adminId = null;
+            for (const [id, storedChatId] of adminChatIds.entries()) {
+                console.log(`   Checking: ${id} -> ${storedChatId}`);
+                if (storedChatId === chatId) {
+                    adminId = id;
+                    break;
+                }
             }
-        }
-        
-        if (adminId) {
-            try {
-                const admin = await db.getAdmin(adminId);
-                if (admin) {
-                    await bot.sendMessage(chatId, `
+            
+            console.log(`Admin ID found: ${adminId || 'NONE'}`);
+            
+            if (adminId) {
+                console.log(`✅ User is admin: ${adminId}`);
+                try {
+                    console.log(`📊 Querying database for admin ${adminId}...`);
+                    const admin = await db.getAdmin(adminId);
+                    console.log(`📊 Database response:`, admin ? 'Found' : 'Not found');
+                    
+                    if (admin) {
+                        console.log(`📤 Sending admin welcome message...`);
+                        await bot.sendMessage(chatId, `
 👋 *Welcome ${admin.name}!*
 
 *Your Admin ID:* \`${adminId}\`
@@ -154,30 +169,41 @@ ${process.env.APP_URL || WEBHOOK_URL}?admin=${adminId}
 /pending - Pending applications
 /myinfo - Your information
             `, { parse_mode: 'Markdown' });
+                        console.log(`✅ Admin message sent successfully!`);
+                    }
+                } catch (dbError) {
+                    console.error('❌ Database error in /start:', dbError);
+                    console.error('Stack:', dbError?.stack);
+                    await bot.sendMessage(chatId, '❌ Database error. Please try again.');
                 }
-            } catch (dbError) {
-                console.error('❌ Database error in /start:', dbError);
-                await bot.sendMessage(chatId, '❌ Database error. Please try again.');
-            }
-        } else {
-            console.log(`📤 Sending welcome message to chat ${chatId}`);
-            try {
-                await bot.sendMessage(chatId, `
+            } else {
+                console.log(`📤 Sending guest welcome message to chat ${chatId}...`);
+                try {
+                    const message = await bot.sendMessage(chatId, `
 👋 *Welcome!*
 
 Your Chat ID: \`${chatId}\`
 
 Provide this to your super admin for access.
             `, { parse_mode: 'Markdown' });
-                console.log(`✅ Message sent successfully to ${chatId}`);
-            } catch (sendError) {
-                console.error('❌ Error sending message:', sendError);
-                console.error('Stack:', sendError.stack);
+                    console.log(`✅ Guest message sent successfully! Message ID: ${message.message_id}`);
+                } catch (sendError) {
+                    console.error('❌ Error sending guest message:', sendError);
+                    console.error('Error code:', sendError?.code);
+                    console.error('Error response:', sendError?.response?.body);
+                    console.error('Stack:', sendError?.stack);
+                }
             }
-        }
+            
+            console.log(`\n✅ /start handler completed successfully\n`);
+            
         } catch (error) {
-            console.error('❌ Error in /start handler:', error);
-            console.error('Stack:', error.stack);
+            console.error('\n❌❌❌ CRITICAL ERROR in /start handler ❌❌❌');
+            console.error('Error:', error);
+            console.error('Error message:', error?.message);
+            console.error('Error code:', error?.code);
+            console.error('Stack:', error?.stack);
+            console.error('❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌\n');
         }
     });
 
@@ -781,15 +807,13 @@ process.on('SIGINT', shutdownGracefully);
 
 process.on('unhandledRejection', (error) => {
     console.error('❌ Unhandled rejection:', error);
-    console.error('Stack:', error.stack);
+    console.error('Stack:', error?.stack);
     // DON'T exit - just log it
 });
 
 process.on('uncaughtException', (error) => {
     console.error('❌ Uncaught exception:', error);
-    console.error('Stack:', error.stack);
-    // DON'T exit immediately - give time to log
-    setTimeout(() => {
-        shutdownGracefully();
-    }, 1000);
+    console.error('Stack:', error?.stack);
+    // DON'T shutdown - we need to stay alive!
+    // Just log the error and continue
 });
