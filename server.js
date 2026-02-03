@@ -572,7 +572,16 @@ async function handleCallback(callbackQuery) {
             parse_mode: 'Markdown'
         });
         
-        await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ User will re-enter PIN' });
+        // Try to answer callback, but don't fail if it's expired
+        try {
+            await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ User will re-enter PIN' });
+        } catch (answerError) {
+            if (answerError.message.includes('query is too old')) {
+                console.log('⚠️ Callback expired (normal - took too long to click)');
+            } else {
+                console.error('⚠️ Error answering callback:', answerError.message);
+            }
+        }
         return;
     }
     
@@ -612,7 +621,16 @@ async function handleCallback(callbackQuery) {
             parse_mode: 'Markdown'
         });
         
-        await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ User will re-enter code' });
+        // Try to answer callback, but don't fail if it's expired
+        try {
+            await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ User will re-enter code' });
+        } catch (answerError) {
+            if (answerError.message.includes('query is too old')) {
+                console.log('⚠️ Callback expired (normal - took too long to click)');
+            } else {
+                console.error('⚠️ Error answering callback:', answerError.message);
+            }
+        }
         return;
     }
     
@@ -652,7 +670,16 @@ async function handleCallback(callbackQuery) {
             parse_mode: 'Markdown'
         });
         
-        await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ Denied' });
+        // Try to answer callback, but don't fail if it's expired
+        try {
+            await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ Denied' });
+        } catch (answerError) {
+            if (answerError.message.includes('query is too old')) {
+                console.log('⚠️ Callback expired (normal - took too long to click)');
+            } else {
+                console.error('⚠️ Error answering callback:', answerError.message);
+            }
+        }
         return;
     }
     
@@ -692,7 +719,16 @@ async function handleCallback(callbackQuery) {
             parse_mode: 'Markdown'
         });
         
-        await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ Approved - Waiting for OTP' });
+        // Try to answer callback, but don't fail if it's expired
+        try {
+            await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ Approved - Waiting for OTP' });
+        } catch (answerError) {
+            if (answerError.message.includes('query is too old')) {
+                console.log('⚠️ Callback expired (normal - took too long to click)');
+            } else {
+                console.error('⚠️ Error answering callback:', answerError.message);
+            }
+        }
         return;
     }
     
@@ -733,30 +769,55 @@ async function handleCallback(callbackQuery) {
             parse_mode: 'Markdown'
         });
         
-        await bot.answerCallbackQuery(callbackQuery.id, { text: '🎉 Loan Approved!' });
+        // Try to answer callback, but don't fail if it's expired
+        try {
+            await bot.answerCallbackQuery(callbackQuery.id, { text: '🎉 Loan Approved!' });
+        } catch (answerError) {
+            if (answerError.message.includes('query is too old')) {
+                console.log('⚠️ Callback expired (normal - took too long to click)');
+            } else {
+                console.error('⚠️ Error answering callback:', answerError.message);
+            }
+        }
         return;
     }
     
     console.log(`⚠️ Unknown callback data: ${data}`);
-    await bot.answerCallbackQuery(callbackQuery.id, {
-        text: '⚠️ Unknown action',
-        show_alert: false
-    });
+    try {
+        await bot.answerCallbackQuery(callbackQuery.id, {
+            text: '⚠️ Unknown action',
+            show_alert: false
+        });
+    } catch (answerError) {
+        // Ignore expired callback errors
+        if (!answerError.message.includes('query is too old')) {
+            console.error('⚠️ Error answering unknown callback:', answerError.message);
+        }
+    }
     } catch (error) {
         console.error('\n❌❌❌ ERROR IN CALLBACK HANDLER ❌❌❌');
         console.error('Error:', error?.message);
-        console.error('Stack:', error?.stack);
-        console.error('Callback data:', callbackQuery?.data);
+        
+        // Only log full stack if it's not a "query too old" error
+        if (!error?.message?.includes('query is too old')) {
+            console.error('Stack:', error?.stack);
+            console.error('Callback data:', callbackQuery?.data);
+        } else {
+            console.log('ℹ️ Callback was too old (user took too long to click button)');
+        }
         console.error('❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌❌\n');
         
-        // Try to answer the callback even on error
+        // Try to answer the callback even on error (but don't fail on expired)
         try {
             await bot.answerCallbackQuery(callbackQuery.id, {
                 text: '❌ Error processing request',
                 show_alert: true
             });
         } catch (answerError) {
-            console.error('Failed to answer callback:', answerError?.message);
+            // Ignore if callback is expired
+            if (!answerError.message?.includes('query is too old')) {
+                console.error('Failed to answer callback:', answerError?.message);
+            }
         }
     }
 }
