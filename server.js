@@ -23,11 +23,24 @@ const adminChatIds = new Map();
 
 let dbReady = false;
 
-// ✅ SETUP WEBHOOK ENDPOINT FIRST (before async init)
+// ==========================================
+// ✅ MIDDLEWARE MUST COME FIRST!
+// ==========================================
+app.use(express.json());
+app.use(express.static(__dirname));
+
+// ✅ SETUP WEBHOOK ENDPOINT (after middleware, before async init)
 const webhookPath = `/telegram-webhook`;
 app.post(webhookPath, (req, res) => {
-    bot.processUpdate(req.body);
-    res.sendStatus(200);
+    try {
+        if (req.body && Object.keys(req.body).length > 0) {
+            bot.processUpdate(req.body);
+        }
+        res.sendStatus(200);
+    } catch (error) {
+        console.error('❌ Webhook error:', error.message);
+        res.sendStatus(200); // Still return 200 to Telegram
+    }
 });
 
 (async () => {
@@ -68,12 +81,9 @@ async function loadAdminChatIds() {
     console.log(`✅ ${adminChatIds.size} admins ready!`);
 }
 
-// Middleware
-app.use(express.json());
-app.use(express.static(__dirname));
-
+// Database ready check middleware
 app.use((req, res, next) => {
-    if (!dbReady && !req.path.includes('/health')) {
+    if (!dbReady && !req.path.includes('/health') && !req.path.includes('/telegram-webhook')) {
         return res.status(503).json({ 
             success: false, 
             message: 'Database not ready yet' 
