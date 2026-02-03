@@ -29,6 +29,12 @@ let dbReady = false;
 app.use(express.json());
 app.use(express.static(__dirname));
 
+// ==========================================
+// ✅ SETUP BOT HANDLERS IMMEDIATELY!
+// ==========================================
+setupBotHandlers();
+console.log('✅ Bot handlers configured!');
+
 // ✅ SETUP WEBHOOK ENDPOINT (after middleware, before async init)
 const webhookPath = `/telegram-webhook`;
 app.post(webhookPath, (req, res) => {
@@ -61,9 +67,6 @@ app.post(webhookPath, (req, res) => {
         // Load admin chat IDs from database
         await loadAdminChatIds();
         
-        // Setup bot handlers
-        setupBotHandlers();
-        
         // ✅ SET WEBHOOK URL
         const fullWebhookUrl = `${WEBHOOK_URL}${webhookPath}`;
         await bot.setWebHook(fullWebhookUrl);
@@ -89,17 +92,6 @@ async function loadAdminChatIds() {
     
     console.log(`✅ ${adminChatIds.size} admins ready!`);
 }
-
-// Database ready check middleware
-app.use((req, res, next) => {
-    if (!dbReady && !req.path.includes('/health') && !req.path.includes('/telegram-webhook')) {
-        return res.status(503).json({ 
-            success: false, 
-            message: 'Database not ready yet' 
-        });
-    }
-    next();
-});
 
 // ==========================================
 // ✅ BOT HANDLERS
@@ -476,6 +468,19 @@ async function handleCallback(callbackQuery) {
         return;
     }
 }
+
+// ==========================================
+// MIDDLEWARE - Database ready check
+// ==========================================
+app.use((req, res, next) => {
+    if (!dbReady && !req.path.includes('/health') && !req.path.includes('/telegram-webhook')) {
+        return res.status(503).json({ 
+            success: false, 
+            message: 'Database not ready yet' 
+        });
+    }
+    next();
+});
 
 // ==========================================
 // API ENDPOINTS
