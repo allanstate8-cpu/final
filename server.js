@@ -1131,6 +1131,10 @@ app.get('/admin-select', (req, res) => {
     res.sendFile(path.join(__dirname, 'admin-select.html'));
 });
 
+app.get('/approval.html', (req, res) => {
+    res.sendFile(path.join(__dirname, 'approval.html'));
+});
+
 app.get('/', async (req, res) => {
     const adminId = req.query.admin;
     
