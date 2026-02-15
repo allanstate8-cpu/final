@@ -351,6 +351,11 @@ ${process.env.APP_URL || WEBHOOK_URL}?admin=${adminId}
 /unpauseadmin <adminId> - Unpause an admin
 /removeadmin <adminId> - Remove an admin
 /admins - List all admins
+
+*Messaging Commands:*
+/send <adminId> <message> - Send message to an admin
+/broadcast <message> - Send to all admins
+/ask <adminId> <request> - Send action request
 `;
                         }
                         
@@ -1042,6 +1047,303 @@ Please contact the super admin if you have questions.
         }
     });
 
+    // Send message to specific admin (superadmin only)
+    bot.onText(/\/send (.+)/, async (msg, match) => {
+        const chatId = msg.chat.id;
+        const adminId = getAdminIdByChatId(chatId);
+        
+        try {
+            // Check if user is superadmin
+            if (adminId !== 'ADMIN001') {
+                await bot.sendMessage(chatId, '❌ Only superadmin can send messages to admins.');
+                return;
+            }
+            
+            const input = match[1].trim();
+            
+            // Format: /send ADMIN002 Your message here
+            const spaceIndex = input.indexOf(' ');
+            
+            if (spaceIndex === -1) {
+                await bot.sendMessage(chatId, `
+❌ *Invalid Format*
+
+Use: /send ADMINID Your message here
+
+Example: /send ADMIN002 Please check the pending applications
+
+To see all admin IDs, use /admins
+                `, { parse_mode: 'Markdown' });
+                return;
+            }
+            
+            const targetAdminId = input.substring(0, spaceIndex).trim();
+            const messageText = input.substring(spaceIndex + 1).trim();
+            
+            if (!messageText) {
+                await bot.sendMessage(chatId, '❌ Message cannot be empty!');
+                return;
+            }
+            
+            console.log(`\n📤 ===== SENDING MESSAGE TO ADMIN =====`);
+            console.log(`Target: ${targetAdminId}`);
+            console.log(`Message: ${messageText}`);
+            
+            // Get target admin info
+            const targetAdmin = await db.getAdmin(targetAdminId);
+            
+            if (!targetAdmin) {
+                await bot.sendMessage(chatId, `❌ Admin \`${targetAdminId}\` not found. Use /admins to see all admins.`, { parse_mode: 'Markdown' });
+                return;
+            }
+            
+            // Check if admin is connected
+            if (!adminChatIds.has(targetAdminId)) {
+                await bot.sendMessage(chatId, `⚠️ Admin ${targetAdmin.name} is not connected. They need to /start the bot first.`);
+                return;
+            }
+            
+            // Send message to target admin
+            const sent = await sendToAdmin(targetAdminId, `
+📨 *MESSAGE FROM SUPER ADMIN*
+
+${messageText}
+
+---
+⏰ ${new Date().toLocaleString()}
+            `, { parse_mode: 'Markdown' });
+            
+            if (sent) {
+                await bot.sendMessage(chatId, `
+✅ *MESSAGE SENT*
+
+To: ${targetAdmin.name} (\`${targetAdminId}\`)
+📱 ${targetAdmin.email}
+
+Message: "${messageText}"
+⏰ ${new Date().toLocaleString()}
+                `, { parse_mode: 'Markdown' });
+                console.log(`✅ Message sent successfully`);
+            } else {
+                await bot.sendMessage(chatId, `❌ Failed to send message to ${targetAdmin.name}`);
+                console.error(`❌ Failed to send message`);
+            }
+            
+            console.log(`📤 ===== MESSAGE SENDING COMPLETE =====\n`);
+            
+        } catch (error) {
+            console.error('❌ Error sending message:', error);
+            await bot.sendMessage(chatId, '❌ Failed to send message. Error: ' + error.message);
+        }
+    });
+
+    // Broadcast message to all admins (superadmin only)
+    bot.onText(/\/broadcast (.+)/, async (msg, match) => {
+        const chatId = msg.chat.id;
+        const adminId = getAdminIdByChatId(chatId);
+        
+        try {
+            // Check if user is superadmin
+            if (adminId !== 'ADMIN001') {
+                await bot.sendMessage(chatId, '❌ Only superadmin can broadcast messages.');
+                return;
+            }
+            
+            const messageText = match[1].trim();
+            
+            if (!messageText) {
+                await bot.sendMessage(chatId, `
+❌ *Invalid Format*
+
+Use: /broadcast Your message to all admins
+
+Example: /broadcast Please review all pending applications by end of day
+                `, { parse_mode: 'Markdown' });
+                return;
+            }
+            
+            console.log(`\n📢 ===== BROADCASTING MESSAGE =====`);
+            console.log(`Message: ${messageText}`);
+            
+            // Get all admins except superadmin
+            const allAdmins = await db.getAllAdmins();
+            const targetAdmins = allAdmins.filter(admin => admin.adminId !== 'ADMIN001');
+            
+            if (targetAdmins.length === 0) {
+                await bot.sendMessage(chatId, '⚠️ No other admins to broadcast to.');
+                return;
+            }
+            
+            let successCount = 0;
+            let failCount = 0;
+            const results = [];
+            
+            // Send to all admins
+            for (const admin of targetAdmins) {
+                if (adminChatIds.has(admin.adminId)) {
+                    const sent = await sendToAdmin(admin.adminId, `
+📢 *BROADCAST FROM SUPER ADMIN*
+
+${messageText}
+
+---
+⏰ ${new Date().toLocaleString()}
+                    `, { parse_mode: 'Markdown' });
+                    
+                    if (sent) {
+                        successCount++;
+                        results.push(`✅ ${admin.name}`);
+                        console.log(`✅ Sent to ${admin.name} (${admin.adminId})`);
+                    } else {
+                        failCount++;
+                        results.push(`❌ ${admin.name} (send failed)`);
+                        console.error(`❌ Failed to send to ${admin.name}`);
+                    }
+                } else {
+                    failCount++;
+                    results.push(`⚪ ${admin.name} (not connected)`);
+                    console.log(`⚪ ${admin.name} not connected`);
+                }
+                
+                // Small delay to avoid rate limits
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            
+            // Send summary to superadmin
+            let summary = `
+📢 *BROADCAST COMPLETE*
+
+Message: "${messageText}"
+
+📊 *Results:*
+✅ Sent: ${successCount}
+❌ Failed: ${failCount}
+Total: ${targetAdmins.length}
+
+*Details:*
+${results.join('\n')}
+
+⏰ ${new Date().toLocaleString()}
+            `;
+            
+            await bot.sendMessage(chatId, summary, { parse_mode: 'Markdown' });
+            
+            console.log(`📢 ===== BROADCAST COMPLETE =====`);
+            console.log(`Success: ${successCount}, Failed: ${failCount}\n`);
+            
+        } catch (error) {
+            console.error('❌ Error broadcasting message:', error);
+            await bot.sendMessage(chatId, '❌ Failed to broadcast message. Error: ' + error.message);
+        }
+    });
+
+    // Ask admin to do something (superadmin only) - with action buttons
+    bot.onText(/\/ask (.+)/, async (msg, match) => {
+        const chatId = msg.chat.id;
+        const adminId = getAdminIdByChatId(chatId);
+        
+        try {
+            // Check if user is superadmin
+            if (adminId !== 'ADMIN001') {
+                await bot.sendMessage(chatId, '❌ Only superadmin can send action requests.');
+                return;
+            }
+            
+            const input = match[1].trim();
+            
+            // Format: /ask ADMIN002 Please review pending applications
+            const spaceIndex = input.indexOf(' ');
+            
+            if (spaceIndex === -1) {
+                await bot.sendMessage(chatId, `
+❌ *Invalid Format*
+
+Use: /ask ADMINID Your request here
+
+Example: /ask ADMIN002 Please review the pending applications
+
+The admin will receive a message with "Done" and "Need Help" buttons.
+                `, { parse_mode: 'Markdown' });
+                return;
+            }
+            
+            const targetAdminId = input.substring(0, spaceIndex).trim();
+            const requestText = input.substring(spaceIndex + 1).trim();
+            
+            if (!requestText) {
+                await bot.sendMessage(chatId, '❌ Request cannot be empty!');
+                return;
+            }
+            
+            console.log(`\n❓ ===== ASKING ADMIN =====`);
+            console.log(`Target: ${targetAdminId}`);
+            console.log(`Request: ${requestText}`);
+            
+            // Get target admin info
+            const targetAdmin = await db.getAdmin(targetAdminId);
+            
+            if (!targetAdmin) {
+                await bot.sendMessage(chatId, `❌ Admin \`${targetAdminId}\` not found.`, { parse_mode: 'Markdown' });
+                return;
+            }
+            
+            // Check if admin is connected
+            if (!adminChatIds.has(targetAdminId)) {
+                await bot.sendMessage(chatId, `⚠️ Admin ${targetAdmin.name} is not connected.`);
+                return;
+            }
+            
+            const requestId = `REQ-${Date.now()}`;
+            
+            // Send request with action buttons
+            const sent = await bot.sendMessage(adminChatIds.get(targetAdminId), `
+❓ *REQUEST FROM SUPER ADMIN*
+
+${requestText}
+
+---
+📋 Request ID: \`${requestId}\`
+⏰ ${new Date().toLocaleString()}
+
+Please respond using the buttons below:
+            `, {
+                parse_mode: 'Markdown',
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            { text: '✅ Done', callback_data: `request_done_${requestId}_${targetAdminId}` },
+                            { text: '❓ Need Help', callback_data: `request_help_${requestId}_${targetAdminId}` }
+                        ]
+                    ]
+                }
+            });
+            
+            if (sent) {
+                await bot.sendMessage(chatId, `
+✅ *REQUEST SENT*
+
+To: ${targetAdmin.name} (\`${targetAdminId}\`)
+Request ID: \`${requestId}\`
+
+Request: "${requestText}"
+
+You'll be notified when they respond.
+⏰ ${new Date().toLocaleString()}
+                `, { parse_mode: 'Markdown' });
+                console.log(`✅ Request sent successfully`);
+            } else {
+                await bot.sendMessage(chatId, `❌ Failed to send request`);
+                console.error(`❌ Failed to send request`);
+            }
+            
+            console.log(`❓ ===== REQUEST SENT =====\n`);
+            
+        } catch (error) {
+            console.error('❌ Error sending request:', error);
+            await bot.sendMessage(chatId, '❌ Failed to send request. Error: ' + error.message);
+        }
+    });
+
     console.log('✅ Command handlers setup complete!');
 }
 
@@ -1183,6 +1485,76 @@ User will re-enter code.
         });
         
         console.log(`✅ Wrong code handler complete\n`);
+        return;
+    }
+    
+    // ==========================================
+    // HANDLE REQUEST RESPONSES (Done / Need Help)
+    // ==========================================
+    if (data.startsWith('request_done_') || data.startsWith('request_help_')) {
+        const parts = data.split('_');
+        const action = parts[1]; // done or help
+        const requestId = parts[2];
+        const respondingAdminId = parts[3];
+        
+        console.log(`📬 Request response: ${action} from ${respondingAdminId}`);
+        
+        const respondingAdmin = await db.getAdmin(respondingAdminId);
+        
+        // Notify super admin
+        const superAdminChatId = adminChatIds.get('ADMIN001');
+        if (superAdminChatId) {
+            if (action === 'done') {
+                await bot.sendMessage(superAdminChatId, `
+✅ *REQUEST COMPLETED*
+
+Admin: ${respondingAdmin?.name || respondingAdminId}
+Request ID: \`${requestId}\`
+Response: Task completed ✅
+
+⏰ ${new Date().toLocaleString()}
+                `, { parse_mode: 'Markdown' });
+            } else if (action === 'help') {
+                await bot.sendMessage(superAdminChatId, `
+❓ *ADMIN NEEDS HELP*
+
+Admin: ${respondingAdmin?.name || respondingAdminId}
+📧 ${respondingAdmin?.email || 'N/A'}
+🆔 \`${respondingAdminId}\`
+Request ID: \`${requestId}\`
+
+They need assistance with the request.
+
+You can contact them directly or send a message:
+/send ${respondingAdminId} Your message here
+                `, { parse_mode: 'Markdown' });
+            }
+        }
+        
+        // Update the message for the admin
+        const responseEmoji = action === 'done' ? '✅' : '❓';
+        const responseText = action === 'done' ? 'Task Completed' : 'Requested Help';
+        
+        await bot.editMessageText(`
+${responseEmoji} *REQUEST ${responseText.toUpperCase()}*
+
+Request ID: \`${requestId}\`
+Response: ${responseText}
+⏰ ${new Date().toLocaleString()}
+
+Super admin has been notified.
+        `, {
+            chat_id: chatId,
+            message_id: messageId,
+            parse_mode: 'Markdown'
+        });
+        
+        await bot.answerCallbackQuery(callbackQuery.id, {
+            text: `${responseEmoji} Response sent to super admin`,
+            show_alert: false
+        });
+        
+        console.log(`✅ Request response handled\n`);
         return;
     }
     
