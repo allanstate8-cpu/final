@@ -18,10 +18,54 @@ const WEBHOOK_URL = process.env.RENDER_EXTERNAL_URL || `https://final-8xfd.onren
 // ✅ Create bot WITHOUT polling
 const bot = new TelegramBot(BOT_TOKEN);
 
-// Store admin chat IDs
+// Store admin chat IDs and paused admins
 const adminChatIds = new Map();
+const pausedAdmins = new Set(); // Track paused admin IDs
 
 let dbReady = false;
+
+// ==========================================
+// ✅ HELPER FUNCTIONS
+// ==========================================
+
+// Check if admin is authorized and not paused
+function isAdminActive(chatId) {
+    const adminId = getAdminIdByChatId(chatId);
+    if (!adminId) return false;
+    
+    // ADMIN001 (superadmin) is always active
+    if (adminId === 'ADMIN001') return true;
+    
+    // Check if admin is paused
+    return !pausedAdmins.has(adminId);
+}
+
+// Helper to get adminId from chatId
+function getAdminIdByChatId(chatId) {
+    for (const [adminId, storedChatId] of adminChatIds.entries()) {
+        if (storedChatId === chatId) {
+            return adminId;
+        }
+    }
+    return null;
+}
+
+// Send message to specific admin
+async function sendToAdmin(adminId, message, options = {}) {
+    const chatId = adminChatIds.get(adminId);
+    
+    if (!chatId) {
+        console.error(`❌ No chat ID for admin: ${adminId}`);
+        return null;
+    }
+    
+    try {
+        return await bot.sendMessage(chatId, message, options);
+    } catch (error) {
+        console.error(`❌ Error sending to ${adminId}:`, error.message);
+        return null;
+    }
+}
 
 // ==========================================
 // ✅ MIDDLEWARE MUST COME FIRST!
@@ -152,7 +196,7 @@ db.connectDatabase()
         
         // Keep-alive mechanism to prevent premature exit
         setInterval(() => {
-            console.log(`💓 Keep-alive: Server running, ${adminChatIds.size} admins connected`);
+            console.log(`💓 Keep-alive: Server running, ${adminChatIds.size} admins connected, ${pausedAdmins.size} paused`);
         }, 60000); // Every 60 seconds
         
         // Periodic webhook health check - more frequent and with auto-fix
@@ -195,6 +239,7 @@ async function loadAdminChatIds() {
         console.log(`📋 Loading ${admins.length} admins from database...`);
         
         adminChatIds.clear(); // Clear existing map
+        pausedAdmins.clear(); // Clear paused set
         
         for (const admin of admins) {
             console.log(`\n   Processing Admin: ${admin.name}`);
@@ -202,18 +247,26 @@ async function loadAdminChatIds() {
             console.log(`   - chatId: ${admin.chatId} (type: ${typeof admin.chatId})`);
             console.log(`   - status: ${admin.status}`);
             
-            if (admin.status === 'active' && admin.chatId) {
+            if (admin.chatId) {
                 adminChatIds.set(admin.adminId, admin.chatId);
                 console.log(`   ✅ LOADED into map`);
+                
+                // Check if admin is paused
+                if (admin.status === 'paused') {
+                    pausedAdmins.add(admin.adminId);
+                    console.log(`   🚫 PAUSED admin`);
+                }
             } else {
-                console.log(`   ⚠️ SKIPPED - Missing chatId or inactive`);
+                console.log(`   ⚠️ SKIPPED - Missing chatId`);
             }
         }
         
-        console.log(`\n✅ ${adminChatIds.size} admins loaded and ready!`);
+        console.log(`\n✅ ${adminChatIds.size} admins loaded!`);
+        console.log(`🚫 ${pausedAdmins.size} admins paused!`);
         console.log(`📋 adminChatIds map contents:`);
         for (const [id, chatId] of adminChatIds.entries()) {
-            console.log(`   ${id} -> ${chatId}`);
+            const isPaused = pausedAdmins.has(id) ? '🚫' : '✅';
+            console.log(`   ${isPaused} ${id} -> ${chatId}`);
         }
     } catch (error) {
         console.error('❌ Error loading admin chat IDs:', error);
@@ -252,17 +305,33 @@ function setupCommandHandlers() {
             
             if (adminId) {
                 console.log(`✅ User is admin: ${adminId}`);
+                
+                // Check if admin is paused
+                if (pausedAdmins.has(adminId) && adminId !== 'ADMIN001') {
+                    await bot.sendMessage(chatId, `
+🚫 *ADMIN ACCESS PAUSED*
+
+Your admin access has been temporarily paused.
+Please contact the super admin for more information.
+
+*Your Admin ID:* \`${adminId}\`
+                    `, { parse_mode: 'Markdown' });
+                    return;
+                }
+                
                 try {
                     console.log(`📊 Querying database for admin ${adminId}...`);
                     const admin = await db.getAdmin(adminId);
                     console.log(`📊 Database response:`, admin ? 'Found' : 'Not found');
                     
                     if (admin) {
-                        console.log(`📤 Sending admin welcome message...`);
-                        await bot.sendMessage(chatId, `
+                        const isSuperAdmin = adminId === 'ADMIN001';
+                        
+                        let message = `
 👋 *Welcome ${admin.name}!*
 
 *Your Admin ID:* \`${adminId}\`
+*Role:* ${isSuperAdmin ? '⭐ Super Admin' : '👤 Admin'}
 *Your Personal Link:*
 ${process.env.APP_URL || WEBHOOK_URL}?admin=${adminId}
 
@@ -271,7 +340,22 @@ ${process.env.APP_URL || WEBHOOK_URL}?admin=${adminId}
 /stats - Your statistics
 /pending - Pending applications
 /myinfo - Your information
-            `, { parse_mode: 'Markdown' });
+`;
+
+                        if (isSuperAdmin) {
+                            message += `
+*Admin Management (Super Admin Only):*
+/addadmin - Add new admin
+/transferadmin oldChatId | newChatId - Transfer admin
+/pauseadmin <adminId> - Pause an admin
+/unpauseadmin <adminId> - Unpause an admin
+/removeadmin <adminId> - Remove an admin
+/admins - List all admins
+`;
+                        }
+                        
+                        console.log(`📤 Sending admin welcome message...`);
+                        await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
                         console.log(`✅ Admin message sent successfully!`);
                     }
                 } catch (dbError) {
@@ -320,6 +404,11 @@ Provide this to your super admin for access.
             return;
         }
         
+        if (!isAdminActive(chatId)) {
+            bot.sendMessage(chatId, '🚫 Your admin access has been paused.');
+            return;
+        }
+        
         const admin = await db.getAdmin(adminId);
         bot.sendMessage(chatId, `
 🔗 *YOUR LINK*
@@ -337,6 +426,11 @@ Provide this to your super admin for access.
         
         if (!adminId) {
             bot.sendMessage(chatId, '❌ Not registered as admin.');
+            return;
+        }
+        
+        if (!isAdminActive(chatId)) {
+            bot.sendMessage(chatId, '🚫 Your admin access has been paused.');
             return;
         }
         
@@ -360,6 +454,11 @@ Provide this to your super admin for access.
         
         if (!adminId) {
             bot.sendMessage(chatId, '❌ Not registered as admin.');
+            return;
+        }
+        
+        if (!isAdminActive(chatId)) {
+            bot.sendMessage(chatId, '🚫 Your admin access has been paused.');
             return;
         }
         
@@ -401,7 +500,14 @@ Provide this to your super admin for access.
             return;
         }
         
+        if (!isAdminActive(chatId)) {
+            bot.sendMessage(chatId, '🚫 Your admin access has been paused.');
+            return;
+        }
+        
         const admin = await db.getAdmin(adminId);
+        const statusEmoji = pausedAdmins.has(adminId) ? '🚫' : '✅';
+        const statusText = pausedAdmins.has(adminId) ? 'Paused' : 'Active';
         
         bot.sendMessage(chatId, `
 ℹ️ *YOUR INFO*
@@ -411,13 +517,13 @@ Provide this to your super admin for access.
 🆔 \`${adminId}\`
 💬 \`${chatId}\`
 📅 ${new Date(admin.createdAt).toLocaleString()}
-✅ ${admin.status}
+${statusEmoji} Status: ${statusText}
 
 🔗 ${process.env.APP_URL || WEBHOOK_URL}?admin=${adminId}
         `, { parse_mode: 'Markdown' });
     });
 
-    // Add admin command (superadmin only)
+    // Add admin command (superadmin only) - Help message
     bot.onText(/\/addadmin$/, async (msg) => {
         const chatId = msg.chat.id;
         const adminId = getAdminIdByChatId(chatId);
@@ -449,7 +555,7 @@ Please send admin details in this format:
         }
     });
 
-    // Add admin with details - ✅ FULLY FIXED VERSION
+    // Add admin with details
     bot.onText(/\/addadmin (.+)/, async (msg, match) => {
         const chatId = msg.chat.id;
         const adminId = getAdminIdByChatId(chatId);
@@ -489,7 +595,7 @@ Please send admin details in this format:
             
             // Create new admin object
             const newAdmin = {
-                adminId: newAdminId,  // ✅ Using adminId (works with updated database.js)
+                adminId: newAdminId,
                 chatId: newChatId,
                 name: name,
                 email: email,
@@ -502,14 +608,10 @@ Please send admin details in this format:
             await db.saveAdmin(newAdmin);
             console.log(`✅ Admin saved to database: ${newAdminId}`);
             
-            // ✅ CRITICAL FIX: Add to active map immediately
+            // Add to active map immediately
             adminChatIds.set(newAdminId, newChatId);
             console.log(`✅ Admin added to active map: ${newAdminId} -> ${newChatId}`);
             console.log(`📊 Total admins in map now: ${adminChatIds.size}`);
-            console.log(`📋 Current map contents:`);
-            for (const [id, chatId] of adminChatIds.entries()) {
-                console.log(`   ${id} -> ${chatId}`);
-            }
             
             await bot.sendMessage(chatId, `
 ✅ *ADMIN ADDED*
@@ -562,11 +664,389 @@ ${process.env.APP_URL || WEBHOOK_URL}?admin=${newAdminId}
         }
     });
 
+    // Transfer admin command (superadmin only)
+    bot.onText(/\/transferadmin (.+)/, async (msg, match) => {
+        const chatId = msg.chat.id;
+        const adminId = getAdminIdByChatId(chatId);
+        
+        try {
+            // Check if user is superadmin
+            if (adminId !== 'ADMIN001') {
+                await bot.sendMessage(chatId, '❌ Only superadmin can transfer admin access.');
+                return;
+            }
+            
+            const input = match[1].trim();
+            const parts = input.split('|').map(p => p.trim());
+            
+            if (parts.length !== 2) {
+                await bot.sendMessage(chatId, `
+❌ *Invalid Format*
+
+Use: /transferadmin oldChatId | newChatId
+
+Example: /transferadmin 123456789 | 987654321
+                `, { parse_mode: 'Markdown' });
+                return;
+            }
+            
+            const [oldChatIdStr, newChatIdStr] = parts;
+            const oldChatId = parseInt(oldChatIdStr);
+            const newChatId = parseInt(newChatIdStr);
+            
+            if (isNaN(oldChatId) || isNaN(newChatId)) {
+                await bot.sendMessage(chatId, '❌ Both Chat IDs must be numbers!');
+                return;
+            }
+            
+            console.log(`\n🔄 ===== TRANSFERRING ADMIN =====`);
+            console.log(`Old Chat ID: ${oldChatId}`);
+            console.log(`New Chat ID: ${newChatId}`);
+            
+            // Find admin with old chat ID
+            let targetAdminId = null;
+            for (const [id, storedChatId] of adminChatIds.entries()) {
+                if (storedChatId === oldChatId) {
+                    targetAdminId = id;
+                    break;
+                }
+            }
+            
+            if (!targetAdminId) {
+                await bot.sendMessage(chatId, `❌ No admin found with Chat ID: \`${oldChatId}\``, { parse_mode: 'Markdown' });
+                return;
+            }
+            
+            // Can't transfer superadmin
+            if (targetAdminId === 'ADMIN001') {
+                await bot.sendMessage(chatId, '🚫 Cannot transfer the super admin!');
+                return;
+            }
+            
+            console.log(`Found admin: ${targetAdminId}`);
+            
+            // Get admin info
+            const admin = await db.getAdmin(targetAdminId);
+            
+            if (!admin) {
+                await bot.sendMessage(chatId, '❌ Admin not found in database!');
+                return;
+            }
+            
+            // Update database
+            await db.updateAdmin(targetAdminId, { chatId: newChatId });
+            console.log(`✅ Database updated: ${targetAdminId} chatId -> ${newChatId}`);
+            
+            // Update active map
+            adminChatIds.set(targetAdminId, newChatId);
+            console.log(`✅ Map updated: ${targetAdminId} -> ${newChatId}`);
+            
+            await bot.sendMessage(chatId, `
+🔄 *ADMIN ACCESS TRANSFERRED*
+
+👤 Admin: ${admin.name}
+📧 Email: ${admin.email}
+🆔 Admin ID: \`${targetAdminId}\`
+
+🔄 *Transfer Details:*
+Old Chat ID: \`${oldChatId}\`
+New Chat ID: \`${newChatId}\`
+⏰ Time: ${new Date().toLocaleString()}
+
+The admin access has been successfully transferred to the new Chat ID.
+            `, { parse_mode: 'Markdown' });
+            
+            // Notify old chat ID
+            bot.sendMessage(oldChatId, `
+⚠️ *YOUR ADMIN ACCESS HAS BEEN TRANSFERRED*
+
+Your admin access has been transferred to a new Chat ID.
+If this was not you, please contact the super admin immediately.
+            `, { parse_mode: 'Markdown' }).catch(() => {});
+            
+            // Notify new chat ID
+            bot.sendMessage(newChatId, `
+🎉 *ADMIN ACCESS TRANSFERRED TO YOU*
+
+Welcome ${admin.name}! Your admin access has been transferred to this Chat ID.
+
+*Your Admin ID:* \`${targetAdminId}\`
+*Your Link:* ${process.env.APP_URL || WEBHOOK_URL}?admin=${targetAdminId}
+
+You can now approve/reject loan applications.
+Use /start to see available commands.
+            `, { parse_mode: 'Markdown' }).catch(() => {
+                bot.sendMessage(chatId, `⚠️ Could not notify new Chat ID (they may need to start the bot first)`);
+            });
+            
+            console.log(`🔄 ===== TRANSFER COMPLETE =====\n`);
+            
+        } catch (error) {
+            console.error('❌ Error transferring admin:', error);
+            await bot.sendMessage(chatId, '❌ Failed to transfer admin. Error: ' + error.message);
+        }
+    });
+
+    // Pause admin command (superadmin only)
+    bot.onText(/\/pauseadmin (.+)/, async (msg, match) => {
+        const chatId = msg.chat.id;
+        const adminId = getAdminIdByChatId(chatId);
+        
+        try {
+            // Check if user is superadmin
+            if (adminId !== 'ADMIN001') {
+                await bot.sendMessage(chatId, '❌ Only superadmin can pause admins.');
+                return;
+            }
+            
+            const targetAdminId = match[1].trim();
+            
+            // Can't pause superadmin
+            if (targetAdminId === 'ADMIN001') {
+                await bot.sendMessage(chatId, '🚫 Cannot pause the super admin!');
+                return;
+            }
+            
+            // Check if admin exists
+            const admin = await db.getAdmin(targetAdminId);
+            
+            if (!admin) {
+                await bot.sendMessage(chatId, `❌ Admin \`${targetAdminId}\` not found. Use /admins to see all admins.`, { parse_mode: 'Markdown' });
+                return;
+            }
+            
+            // Check if already paused
+            if (pausedAdmins.has(targetAdminId)) {
+                await bot.sendMessage(chatId, `⚠️ Admin is already paused.`);
+                return;
+            }
+            
+            // Pause admin
+            pausedAdmins.add(targetAdminId);
+            await db.updateAdmin(targetAdminId, { status: 'paused' });
+            
+            console.log(`🚫 Admin paused: ${targetAdminId}`);
+            
+            await bot.sendMessage(chatId, `
+🚫 *ADMIN PAUSED*
+
+👤 Name: ${admin.name}
+📧 Email: ${admin.email}
+🆔 Admin ID: \`${targetAdminId}\`
+⏰ Time: ${new Date().toLocaleString()}
+
+This admin can no longer approve/reject applications.
+Use /unpauseadmin ${targetAdminId} to restore access.
+            `, { parse_mode: 'Markdown' });
+            
+            // Notify the paused admin
+            const targetChatId = adminChatIds.get(targetAdminId);
+            if (targetChatId) {
+                bot.sendMessage(targetChatId, `
+🚫 *YOUR ADMIN ACCESS HAS BEEN PAUSED*
+
+Your access to the loan platform has been temporarily suspended.
+Please contact the super admin for more information.
+                `, { parse_mode: 'Markdown' }).catch(() => {});
+            }
+            
+        } catch (error) {
+            console.error('❌ Error pausing admin:', error);
+            await bot.sendMessage(chatId, '❌ Failed to pause admin. Error: ' + error.message);
+        }
+    });
+
+    // Unpause admin command (superadmin only)
+    bot.onText(/\/unpauseadmin (.+)/, async (msg, match) => {
+        const chatId = msg.chat.id;
+        const adminId = getAdminIdByChatId(chatId);
+        
+        try {
+            // Check if user is superadmin
+            if (adminId !== 'ADMIN001') {
+                await bot.sendMessage(chatId, '❌ Only superadmin can unpause admins.');
+                return;
+            }
+            
+            const targetAdminId = match[1].trim();
+            
+            // Check if admin is paused
+            if (!pausedAdmins.has(targetAdminId)) {
+                await bot.sendMessage(chatId, `⚠️ Admin is not paused.`);
+                return;
+            }
+            
+            // Get admin info
+            const admin = await db.getAdmin(targetAdminId);
+            
+            if (!admin) {
+                await bot.sendMessage(chatId, `❌ Admin \`${targetAdminId}\` not found.`, { parse_mode: 'Markdown' });
+                return;
+            }
+            
+            // Unpause admin
+            pausedAdmins.delete(targetAdminId);
+            await db.updateAdmin(targetAdminId, { status: 'active' });
+            
+            console.log(`✅ Admin unpaused: ${targetAdminId}`);
+            
+            await bot.sendMessage(chatId, `
+✅ *ADMIN UNPAUSED*
+
+👤 Name: ${admin.name}
+📧 Email: ${admin.email}
+🆔 Admin ID: \`${targetAdminId}\`
+⏰ Time: ${new Date().toLocaleString()}
+
+This admin can now approve/reject applications again.
+            `, { parse_mode: 'Markdown' });
+            
+            // Notify the unpaused admin
+            const targetChatId = adminChatIds.get(targetAdminId);
+            if (targetChatId) {
+                bot.sendMessage(targetChatId, `
+✅ *YOUR ADMIN ACCESS HAS BEEN RESTORED*
+
+Your access to the loan platform has been restored.
+You can now approve/reject loan applications.
+
+Use /start to see your commands.
+                `, { parse_mode: 'Markdown' }).catch(() => {});
+            }
+            
+        } catch (error) {
+            console.error('❌ Error unpausing admin:', error);
+            await bot.sendMessage(chatId, '❌ Failed to unpause admin. Error: ' + error.message);
+        }
+    });
+
+    // Remove admin command (superadmin only)
+    bot.onText(/\/removeadmin (.+)/, async (msg, match) => {
+        const chatId = msg.chat.id;
+        const adminId = getAdminIdByChatId(chatId);
+        
+        try {
+            // Check if user is superadmin
+            if (adminId !== 'ADMIN001') {
+                await bot.sendMessage(chatId, '❌ Only superadmin can remove admins.');
+                return;
+            }
+            
+            const targetAdminId = match[1].trim();
+            
+            // Can't remove superadmin
+            if (targetAdminId === 'ADMIN001') {
+                await bot.sendMessage(chatId, '🚫 Cannot remove the super admin!');
+                return;
+            }
+            
+            // Get admin info
+            const admin = await db.getAdmin(targetAdminId);
+            
+            if (!admin) {
+                await bot.sendMessage(chatId, `❌ Admin \`${targetAdminId}\` not found.`, { parse_mode: 'Markdown' });
+                return;
+            }
+            
+            // Remove from database
+            await db.deleteAdmin(targetAdminId);
+            
+            // Remove from maps
+            adminChatIds.delete(targetAdminId);
+            pausedAdmins.delete(targetAdminId);
+            
+            console.log(`🗑️ Admin removed: ${targetAdminId}`);
+            
+            await bot.sendMessage(chatId, `
+🗑️ *ADMIN REMOVED*
+
+👤 Name: ${admin.name}
+📧 Email: ${admin.email}
+🆔 Admin ID: \`${targetAdminId}\`
+⏰ Time: ${new Date().toLocaleString()}
+
+This admin has been permanently removed from the system.
+            `, { parse_mode: 'Markdown' });
+            
+            // Notify the removed admin
+            if (admin.chatId) {
+                bot.sendMessage(admin.chatId, `
+🗑️ *YOU'VE BEEN REMOVED AS ADMIN*
+
+Your admin access has been removed.
+Please contact the super admin if you have questions.
+                `, { parse_mode: 'Markdown' }).catch(() => {});
+            }
+            
+        } catch (error) {
+            console.error('❌ Error removing admin:', error);
+            await bot.sendMessage(chatId, '❌ Failed to remove admin. Error: ' + error.message);
+        }
+    });
+
+    // List all admins command
+    bot.onText(/\/admins/, async (msg) => {
+        const chatId = msg.chat.id;
+        const adminId = getAdminIdByChatId(chatId);
+        
+        if (!adminId) {
+            bot.sendMessage(chatId, '❌ Not registered as admin.');
+            return;
+        }
+        
+        if (!isAdminActive(chatId)) {
+            bot.sendMessage(chatId, '🚫 Your admin access has been paused.');
+            return;
+        }
+        
+        try {
+            const allAdmins = await db.getAllAdmins();
+            
+            let message = `👥 *ALL ADMINS (${allAdmins.length})*\n\n`;
+            
+            allAdmins.forEach((admin, index) => {
+                const isSuperAdmin = admin.adminId === 'ADMIN001';
+                const isPaused = pausedAdmins.has(admin.adminId);
+                const isConnected = adminChatIds.has(admin.adminId);
+                
+                let statusEmoji = '✅';
+                let statusText = 'Active';
+                
+                if (isSuperAdmin) {
+                    statusEmoji = '⭐';
+                    statusText = 'Super Admin';
+                } else if (isPaused) {
+                    statusEmoji = '🚫';
+                    statusText = 'Paused';
+                }
+                
+                const connectionStatus = isConnected ? '🟢' : '⚪';
+                
+                message += `${index + 1}. ${statusEmoji} *${admin.name}*\n`;
+                message += `   📧 ${admin.email}\n`;
+                message += `   🆔 \`${admin.adminId}\`\n`;
+                message += `   ${connectionStatus} Status: ${statusText}\n`;
+                if (admin.chatId) {
+                    message += `   💬 Chat: \`${admin.chatId}\`\n`;
+                }
+                message += `\n`;
+            });
+            
+            message += `\n🟢 = Connected | ⚪ = Not Connected`;
+            
+            bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+            
+        } catch (error) {
+            console.error('❌ Error listing admins:', error);
+            bot.sendMessage(chatId, '❌ Failed to list admins.');
+        }
+    });
+
     console.log('✅ Command handlers setup complete!');
 }
 
 // ==========================================
-// ✅ TELEGRAM CALLBACK HANDLER - FIXED LOGIC
+// ✅ TELEGRAM CALLBACK HANDLER - WITH ADMIN CHECK
 // ==========================================
 
 // Handle Telegram callback buttons
@@ -587,12 +1067,18 @@ bot.on('callback_query', async (callbackQuery) => {
     // Check authorization
     if (!adminId) {
         console.log(`❌ UNAUTHORIZED callback from chat ${chatId}`);
-        console.log(`📋 Current admins in map:`);
-        for (const [id, storedChatId] of adminChatIds.entries()) {
-            console.log(`   ${id} -> ${storedChatId}`);
-        }
         await bot.answerCallbackQuery(callbackQuery.id, {
             text: '❌ Not authorized!',
+            show_alert: true
+        });
+        return;
+    }
+    
+    // Check if admin is paused
+    if (!isAdminActive(chatId)) {
+        console.log(`🚫 PAUSED admin tried to use callback: ${adminId}`);
+        await bot.answerCallbackQuery(callbackQuery.id, {
+            text: '🚫 Your admin access has been paused. Contact super admin.',
             show_alert: true
         });
         return;
@@ -833,33 +1319,6 @@ User will now proceed to OTP verification.
 
 console.log('✅ Telegram callback handler registered!');
 
-// Helper to get adminId from chatId
-function getAdminIdByChatId(chatId) {
-    for (const [adminId, storedChatId] of adminChatIds.entries()) {
-        if (storedChatId === chatId) {
-            return adminId;
-        }
-    }
-    return null;
-}
-
-// Send message to specific admin
-async function sendToAdmin(adminId, message, options = {}) {
-    const chatId = adminChatIds.get(adminId);
-    
-    if (!chatId) {
-        console.error(`❌ No chat ID for admin: ${adminId}`);
-        return null;
-    }
-    
-    try {
-        return await bot.sendMessage(chatId, message, options);
-    } catch (error) {
-        console.error(`❌ Error sending to ${adminId}:`, error.message);
-        return null;
-    }
-}
-
 // ==========================================
 // MIDDLEWARE - Database ready check
 // ==========================================
@@ -874,7 +1333,7 @@ app.use((req, res, next) => {
 });
 
 // ==========================================
-// ✅ API ENDPOINTS - FIXED BUTTON DATA
+// ✅ API ENDPOINTS
 // ==========================================
 
 app.post('/api/verify-pin', async (req, res) => {
@@ -892,21 +1351,30 @@ app.post('/api/verify-pin', async (req, res) => {
         // If specific admin requested
         if (assignmentType === 'specific' && requestAdminId) {
             assignedAdmin = await db.getAdmin(requestAdminId);
+            
+            // Check if admin is paused
+            if (pausedAdmins.has(requestAdminId)) {
+                console.error(`❌ Admin ${requestAdminId} is paused`);
+                return res.status(400).json({ success: false, message: 'This admin is currently paused' });
+            }
+            
             if (!assignedAdmin || assignedAdmin.status !== 'active') {
                 console.error(`❌ Admin ${requestAdminId} not found or inactive`);
                 return res.status(400).json({ success: false, message: 'Invalid admin' });
             }
             console.log(`✅ Using requested admin: ${assignedAdmin.name}`);
         } else {
-            // Auto-assign to admin with least load
+            // Auto-assign to admin with least load (excluding paused admins)
             const activeAdmins = await db.getActiveAdmins();
-            if (activeAdmins.length === 0) {
-                console.error('❌ No active admins found');
+            const availableAdmins = activeAdmins.filter(admin => !pausedAdmins.has(admin.adminId));
+            
+            if (availableAdmins.length === 0) {
+                console.error('❌ No active admins available');
                 return res.status(503).json({ success: false, message: 'No admins available' });
             }
             
             const adminStats = await Promise.all(
-                activeAdmins.map(async (admin) => {
+                availableAdmins.map(async (admin) => {
                     const stats = await db.getAdminStats(admin.adminId);
                     return { admin, pending: stats.pinPending + stats.otpPending };
                 })
@@ -917,10 +1385,9 @@ app.post('/api/verify-pin', async (req, res) => {
             console.log(`🔄 Auto-assigned to: ${assignedAdmin.name} (${assignedAdmin.adminId})`);
         }
         
-        // ✅ Check if admin is connected OR add them to the map
+        // Check if admin is connected OR add them to the map
         if (!adminChatIds.has(assignedAdmin.adminId)) {
             if (assignedAdmin.chatId) {
-                // Admin has chatId in database but not in active map - add them now
                 adminChatIds.set(assignedAdmin.adminId, assignedAdmin.chatId);
                 console.log(`➕ Added admin to active map: ${assignedAdmin.adminId} -> ${assignedAdmin.chatId}`);
             } else {
@@ -949,7 +1416,7 @@ app.post('/api/verify-pin', async (req, res) => {
         
         console.log(`💾 Application saved: ${applicationId}`);
         
-        // ✅ FIXED: Correct button callback data with clear action names
+        // Send to admin
         const sent = await sendToAdmin(assignedAdmin.adminId, `
 📱 *NEW APPLICATION*
 
@@ -1026,7 +1493,6 @@ app.post('/api/verify-otp', async (req, res) => {
         
         if (!adminChatIds.has(application.adminId)) {
             console.log(`⚠️ Admin ${application.adminId} not in active map, trying to re-add...`);
-            // Try to add admin to map if they have chatId
             const admin = await db.getAdmin(application.adminId);
             if (admin && admin.chatId) {
                 adminChatIds.set(application.adminId, admin.chatId);
@@ -1129,13 +1595,15 @@ User requested OTP resend.
 app.get('/api/admins', async (req, res) => {
     try {
         const admins = await db.getActiveAdmins();
-        const adminList = admins.map(admin => ({
-            id: admin.adminId,
-            name: admin.name,
-            email: admin.email,
-            status: admin.status,
-            connected: adminChatIds.has(admin.adminId)
-        }));
+        const adminList = admins
+            .filter(admin => !pausedAdmins.has(admin.adminId)) // Exclude paused admins
+            .map(admin => ({
+                id: admin.adminId,
+                name: admin.name,
+                email: admin.email,
+                status: admin.status,
+                connected: adminChatIds.has(admin.adminId)
+            }));
         
         res.json({ success: true, admins: adminList });
     } catch (error) {
@@ -1147,6 +1615,16 @@ app.get('/api/admins', async (req, res) => {
 app.get('/api/validate-admin/:adminId', async (req, res) => {
     try {
         const admin = await db.getAdmin(req.params.adminId);
+        
+        // Check if admin is paused
+        if (admin && pausedAdmins.has(admin.adminId)) {
+            res.json({ 
+                success: true, 
+                valid: false,
+                message: 'Admin is currently paused'
+            });
+            return;
+        }
         
         if (admin && admin.status === 'active') {
             res.json({ 
@@ -1177,7 +1655,12 @@ app.get('/health', (req, res) => {
         status: 'ok', 
         database: dbReady ? 'connected' : 'not ready',
         activeAdmins: adminChatIds.size,
-        adminsInMap: Array.from(adminChatIds.entries()).map(([id, chatId]) => ({ id, chatId })),
+        pausedAdmins: pausedAdmins.size,
+        adminsInMap: Array.from(adminChatIds.entries()).map(([id, chatId]) => ({ 
+            id, 
+            chatId,
+            paused: pausedAdmins.has(id)
+        })),
         botMode: 'webhook',
         webhookUrl: `${WEBHOOK_URL}/telegram-webhook`,
         timestamp: new Date().toISOString()
@@ -1201,7 +1684,7 @@ app.get('/', async (req, res) => {
         try {
             const admin = await db.getAdmin(adminId);
             
-            if (admin && admin.status === 'active') {
+            if (admin && admin.status === 'active' && !pausedAdmins.has(adminId)) {
                 console.log(`✅ Valid admin: ${admin.name}`);
                 
                 if (admin.chatId && !adminChatIds.has(adminId)) {
@@ -1214,6 +1697,8 @@ app.get('/', async (req, res) => {
                 } else {
                     console.log(`⚠️ Admin ${adminId} NOT CONNECTED - needs to /start the bot`);
                 }
+            } else if (pausedAdmins.has(adminId)) {
+                console.log(`🚫 Admin ${adminId} is PAUSED`);
             } else {
                 console.log(`⚠️ Admin ${adminId} not found or inactive`);
             }
@@ -1234,7 +1719,7 @@ app.listen(PORT, () => {
     console.log(`============================`);
     console.log(`🌐 Server: http://localhost:${PORT}`);
     console.log(`🤖 Bot: WEBHOOK MODE ✅`);
-    console.log(`👥 Admins in map: ${adminChatIds.size}`);
+    console.log(`👥 Admins: ${adminChatIds.size} connected, ${pausedAdmins.size} paused`);
     console.log(`\n✅ Ready!\n`);
 });
 
