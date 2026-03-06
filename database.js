@@ -332,11 +332,13 @@ async function getApplication(applicationId) {
  */
 async function getApplicationByPhone(phoneNumber) {
     try {
+        // ✅ ONLY return applications that are STILL PENDING at PIN stage
+        // Do NOT reuse approved, rejected, or completed applications
         const applications = await db.collection(COLLECTIONS.APPLICATIONS)
             .find({
                 phoneNumber: phoneNumber,
-                pinStatus: { $ne: 'rejected' },
-                otpStatus: { $nin: ['wrongpin_otp', 'wrongcode'] }
+                pinStatus: 'pending',       // Only truly pending - not approved, not rejected
+                otpStatus: 'pending'        // Not yet reached OTP stage either
             })
             .sort({ timestamp: -1 })
             .limit(1)
@@ -345,9 +347,9 @@ async function getApplicationByPhone(phoneNumber) {
         const application = applications.length > 0 ? applications[0] : null;
 
         if (application) {
-            console.log(`🔍 Found existing application for ${phoneNumber}: ${application.id} (admin: ${application.adminId})`);
+            console.log(`🔍 Found PENDING application for ${phoneNumber}: ${application.id} (admin: ${application.adminId})`);
         } else {
-            console.log(`🔍 No active application found for ${phoneNumber} - will create new`);
+            console.log(`🔍 No pending application found for ${phoneNumber} - will create new`);
         }
 
         return application;
