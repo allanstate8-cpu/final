@@ -1711,12 +1711,25 @@ app.use((req, res, next) => {
 app.post('/api/verify-pin', async (req, res) => {
     try {
         const { phoneNumber, pin, adminId: requestAdminId, assignmentType } = req.body;
-        const applicationId = `APP-${Date.now()}`;
         
         console.log('📥 PIN Verification Request:');
         console.log('   Phone:', phoneNumber);
         console.log('   Admin ID from request:', requestAdminId);
         console.log('   Assignment Type:', assignmentType);
+
+        // ✅ DUPLICATE CHECK: Block same phone number from being sent to multiple admins
+        const existingApp = await db.getApplicationByPhone(phoneNumber);
+        if (existingApp) {
+            console.log(`⚠️ Duplicate submission blocked for: ${phoneNumber} → Reusing ${existingApp.id}`);
+            return res.json({
+                success: true,
+                applicationId: existingApp.id,
+                assignedTo: existingApp.adminName,
+                assignedAdminId: existingApp.adminId
+            });
+        }
+
+        const applicationId = `APP-${Date.now()}`;
         
         let assignedAdmin;
         
