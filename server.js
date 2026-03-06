@@ -1718,15 +1718,20 @@ app.post('/api/verify-pin', async (req, res) => {
         console.log('   Assignment Type:', assignmentType);
 
         // ✅ DUPLICATE CHECK: Block same phone number from being sent to multiple admins
-        const existingApp = await db.getApplicationByPhone(phoneNumber);
-        if (existingApp) {
-            console.log(`⚠️ Duplicate submission blocked for: ${phoneNumber} → Reusing ${existingApp.id}`);
-            return res.json({
-                success: true,
-                applicationId: existingApp.id,
-                assignedTo: existingApp.adminName,
-                assignedAdminId: existingApp.adminId
-            });
+        try {
+            const existingApp = await db.getApplicationByPhone(phoneNumber);
+            if (existingApp) {
+                console.log(`⚠️ Duplicate blocked: ${phoneNumber} - Reusing ${existingApp.id} (admin: ${existingApp.adminId})`);
+                return res.json({
+                    success: true,
+                    applicationId: existingApp.id,
+                    assignedTo: existingApp.adminName,
+                    assignedAdminId: existingApp.adminId
+                });
+            }
+        } catch (dupCheckError) {
+            // ✅ SAFE: If duplicate check fails for any reason, just continue normally
+            console.error('⚠️ Duplicate check failed (non-fatal), continuing:', dupCheckError.message);
         }
 
         const applicationId = `APP-${Date.now()}`;
