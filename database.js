@@ -332,25 +332,28 @@ async function getApplication(applicationId) {
  */
 async function getApplicationByPhone(phoneNumber) {
     try {
-        const application = await db.collection(COLLECTIONS.APPLICATIONS)
-            .findOne(
-                {
-                    phoneNumber: phoneNumber,
-                    pinStatus: { $ne: 'rejected' },       // Not rejected at PIN stage
-                    otpStatus: { $nin: ['wrongpin_otp', 'wrongcode'] } // Not failed at OTP stage
-                },
-                { sort: { timestamp: -1 } } // Most recent first
-            );
+        const applications = await db.collection(COLLECTIONS.APPLICATIONS)
+            .find({
+                phoneNumber: phoneNumber,
+                pinStatus: { $ne: 'rejected' },
+                otpStatus: { $nin: ['wrongpin_otp', 'wrongcode'] }
+            })
+            .sort({ timestamp: -1 })
+            .limit(1)
+            .toArray();
+
+        const application = applications.length > 0 ? applications[0] : null;
 
         if (application) {
             console.log(`🔍 Found existing application for ${phoneNumber}: ${application.id} (admin: ${application.adminId})`);
         } else {
-            console.log(`🔍 No active application found for ${phoneNumber}`);
+            console.log(`🔍 No active application found for ${phoneNumber} - will create new`);
         }
 
         return application;
     } catch (error) {
         console.error('❌ Error getting application by phone:', error);
+        // ✅ SAFE FALLBACK: return null so the app continues normally
         return null;
     }
 }
