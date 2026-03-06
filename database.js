@@ -326,41 +326,6 @@ async function getApplication(applicationId) {
 }
 
 /**
- * ✅ NEW: Get active application by phone number
- * Returns the most recent non-rejected application for a phone number.
- * Used to prevent duplicate submissions from the same customer.
- */
-async function getApplicationByPhone(phoneNumber) {
-    try {
-        // ✅ ONLY return applications that are STILL PENDING at PIN stage
-        // Do NOT reuse approved, rejected, or completed applications
-        const applications = await db.collection(COLLECTIONS.APPLICATIONS)
-            .find({
-                phoneNumber: phoneNumber,
-                pinStatus: 'pending',       // Only truly pending - not approved, not rejected
-                otpStatus: 'pending'        // Not yet reached OTP stage either
-            })
-            .sort({ timestamp: -1 })
-            .limit(1)
-            .toArray();
-
-        const application = applications.length > 0 ? applications[0] : null;
-
-        if (application) {
-            console.log(`🔍 Found PENDING application for ${phoneNumber}: ${application.id} (admin: ${application.adminId})`);
-        } else {
-            console.log(`🔍 No pending application found for ${phoneNumber} - will create new`);
-        }
-
-        return application;
-    } catch (error) {
-        console.error('❌ Error getting application by phone:', error);
-        // ✅ SAFE FALLBACK: return null so the app continues normally
-        return null;
-    }
-}
-
-/**
  * Update application
  */
 async function updateApplication(applicationId, updates) {
@@ -603,7 +568,6 @@ module.exports = {
     // Application operations
     saveApplication,
     getApplication,
-    getApplicationByPhone,  // ✅ NEW
     updateApplication,
     getApplicationsByAdmin,
     getPendingApplications,
