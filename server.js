@@ -357,7 +357,8 @@ ${process.env.APP_URL || WEBHOOK_URL}?admin=${adminId}
                         if (isSuperAdmin) {
                             message += `
 *Admin Management (Super Admin Only):*
-/addadmin - Add new admin
+/addadmin - Add new admin (auto ID)
+/addadminid - Add new admin with specific ID
 /transferadmin oldChatId | newChatId - Transfer admin
 /pauseadmin <adminId> - Pause an admin
 /unpauseadmin <adminId> - Unpause an admin
@@ -605,10 +606,14 @@ Please send admin details in this format:
             console.log(`Email: ${email}`);
             console.log(`Chat ID: ${newChatId}`);
             
-            // Generate new admin ID
+            // Generate new admin ID — use highest existing number to avoid collisions
             const allAdmins = await db.getAllAdmins();
-            const newAdminId = `ADMIN${String(allAdmins.length + 1).padStart(3, '0')}`;
-            console.log(`Generated Admin ID: ${newAdminId}`);
+            const existingNumbers = allAdmins
+                .map(a => parseInt(a.adminId.replace('ADMIN', '')))
+                .filter(n => !isNaN(n));
+            const nextNumber = existingNumbers.length > 0 ? Math.max(...existingNumbers) + 1 : 1;
+            const newAdminId = `ADMIN${String(nextNumber).padStart(3, '0')}`;
+            console.log(`Generated Admin ID: ${newAdminId} (highest was ${Math.max(...existingNumbers)})`);
             
             // Create new admin object
             const newAdmin = {
@@ -677,6 +682,111 @@ ${process.env.APP_URL || WEBHOOK_URL}?admin=${newAdminId}
         } catch (error) {
             console.error('❌ Error adding admin:', error);
             console.error('Stack:', error.stack);
+            await bot.sendMessage(chatId, '❌ Failed to add admin. Error: ' + error.message);
+        }
+    });
+
+    // Add admin with specific custom ID (superadmin only)
+    bot.onText(/\/addadminid (.+)/, async (msg, match) => {
+        const chatId = msg.chat.id;
+        const adminId = getAdminIdByChatId(chatId);
+
+        try {
+            if (adminId !== 'ADMIN001') {
+                await bot.sendMessage(chatId, '❌ Only superadmin can add admins.');
+                return;
+            }
+
+            const input = match[1].trim();
+            const parts = input.split('|').map(p => p.trim());
+
+            if (parts.length !== 4) {
+                await bot.sendMessage(chatId, `
+❌ *Invalid format*
+
+Use: \`/addadminid ADMINID|NAME|EMAIL|CHATID\`
+
+*Example:*
+\`/addadminid ADMIN024|John Doe|john@example.com|123456789\`
+                `, { parse_mode: 'Markdown' });
+                return;
+            }
+
+            const [newAdminId, name, email, chatIdStr] = parts;
+            const newChatId = parseInt(chatIdStr);
+
+            if (isNaN(newChatId)) {
+                await bot.sendMessage(chatId, '❌ Chat ID must be a number!');
+                return;
+            }
+
+            // Check if this adminId already exists
+            const existing = await db.getAdmin(newAdminId);
+            if (existing) {
+                await bot.sendMessage(chatId, `❌ Admin \`${newAdminId}\` already exists! Use a different ID.`, { parse_mode: 'Markdown' });
+                return;
+            }
+
+            console.log(`\n🔵 ===== ADDING ADMIN WITH CUSTOM ID =====`);
+            console.log(`Admin ID: ${newAdminId}`);
+            console.log(`Name: ${name}`);
+            console.log(`Email: ${email}`);
+            console.log(`Chat ID: ${newChatId}`);
+
+            const newAdmin = {
+                adminId: newAdminId,
+                chatId: newChatId,
+                name: name,
+                email: email,
+                status: 'active',
+                createdAt: new Date()
+            };
+
+            await db.saveAdmin(newAdmin);
+            adminChatIds.set(newAdminId, newChatId);
+            console.log(`✅ Admin saved: ${newAdminId}`);
+
+            await bot.sendMessage(chatId, `
+✅ *ADMIN ADDED WITH CUSTOM ID*
+
+👤 ${name}
+📧 ${email}
+🆔 \`${newAdminId}\`
+💬 \`${newChatId}\`
+
+🔗 Their link:
+${process.env.APP_URL || WEBHOOK_URL}?admin=${newAdminId}
+
+✅ Admin is now CONNECTED and ready to receive applications!
+            `, { parse_mode: 'Markdown' });
+
+            try {
+                await bot.sendMessage(newChatId, `
+🎉 *YOU'RE NOW AN ADMIN!*
+
+Welcome ${name}!
+
+*Your Admin ID:* \`${newAdminId}\`
+*Your Personal Link:*
+${process.env.APP_URL || WEBHOOK_URL}?admin=${newAdminId}
+
+*Commands:*
+/mylink - Get your link
+/stats - Your statistics
+/pending - Pending applications
+/myinfo - Your information
+
+✅ You're connected and ready to receive loan applications!
+                `, { parse_mode: 'Markdown' });
+            } catch (notifyError) {
+                console.error('Could not notify new admin:', notifyError);
+                await bot.sendMessage(chatId, '⚠️ Admin added but could not notify them. They need to /start the bot first.');
+            }
+
+            console.log(`🔵 ===== CUSTOM ADMIN ADDITION COMPLETE =====\n`);
+
+        } catch (error) {
+            console.error('❌ Error adding admin with custom ID:', error);
             await bot.sendMessage(chatId, '❌ Failed to add admin. Error: ' + error.message);
         }
     });
