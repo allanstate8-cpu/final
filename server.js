@@ -346,15 +346,11 @@ Please contact the super admin for more information.
 
 *Your Admin ID:* \`${adminId}\`
 *Role:* ${isSuperAdmin ? '⭐ Super Admin' : '👤 Admin'}
-
-✅ *Facebook-Safe Link (Share this!):*
-${process.env.APP_URL || WEBHOOK_URL}/go/${adminId}
-
-📎 *Standard Link:*
+*Your Personal Link:*
 ${process.env.APP_URL || WEBHOOK_URL}?admin=${adminId}
 
 *Commands:*
-/mylink - Get your links
+/mylink - Get your link
 /stats - Your statistics
 /pending - Pending applications
 /myinfo - Your information
@@ -434,19 +430,12 @@ Provide this to your super admin for access.
         }
         
         const admin = await db.getAdmin(adminId);
-        const baseUrl = process.env.APP_URL || WEBHOOK_URL;
         bot.sendMessage(chatId, `
-🔗 *YOUR LINKS*
+🔗 *YOUR LINK*
 
-✅ *Facebook/WhatsApp Safe (RECOMMENDED):*
-\`${baseUrl}/go/${adminId}\`
-
-📎 *Standard Link:*
-\`${baseUrl}?admin=${adminId}\`
+\`${process.env.APP_URL || WEBHOOK_URL}?admin=${adminId}\`
 
 📋 Applications → *${admin.name}*
-
-💡 Use the /go/ link on social media — Facebook strips ?query params!
         `, { parse_mode: 'Markdown' });
     });
 
@@ -550,10 +539,7 @@ Provide this to your super admin for access.
 📅 ${new Date(admin.createdAt).toLocaleString()}
 ${statusEmoji} Status: ${statusText}
 
-✅ *FB-Safe Link:*
-${process.env.APP_URL || WEBHOOK_URL}/go/${adminId}
-
-📎 Standard: ${process.env.APP_URL || WEBHOOK_URL}?admin=${adminId}
+🔗 ${process.env.APP_URL || WEBHOOK_URL}?admin=${adminId}
         `, { parse_mode: 'Markdown' });
     });
 
@@ -2171,53 +2157,11 @@ app.get('/approval.html', (req, res) => {
     res.sendFile(path.join(__dirname, 'approval.html'));
 });
 
-// ==========================================
-// ✅ PATH-BASED ADMIN ROUTE - FACEBOOK SAFE
-// Facebook, WhatsApp and other social media
-// strip ?query params but NEVER strip /path/segments
-// Share: https://yoursite.com/go/ADMIN-123  ← safe
-// ==========================================
-app.get('/go/:adminId', async (req, res) => {
-    const { adminId } = req.params;
-    console.log(`🔗 Path-based admin link accessed: ${adminId}`);
-
-    try {
-        const admin = await db.getAdmin(adminId);
-
-        if (admin && admin.status === 'active' && !pausedAdmins.has(adminId)) {
-            console.log(`✅ Valid path-based admin: ${admin.name}`);
-
-            // Ensure admin is in active map
-            if (admin.chatId && !adminChatIds.has(adminId)) {
-                adminChatIds.set(adminId, admin.chatId);
-            }
-
-            // ✅ Set HTTP cookie — survives Facebook link stripping
-            // httpOnly: false so JS can read it too
-            res.cookie('assignedAdminId', adminId, {
-                maxAge: 24 * 60 * 60 * 1000, // 24 hours
-                httpOnly: false,
-                sameSite: 'lax',
-                path: '/'
-            });
-
-            console.log(`🍪 Cookie set for admin: ${adminId}`);
-        } else {
-            console.log(`⚠️ Admin ${adminId} not found, paused, or inactive`);
-        }
-    } catch (error) {
-        console.error('Error in /go/:adminId:', error);
-    }
-
-    // Always serve the landing page (with or without valid admin)
-    res.sendFile(path.join(__dirname, 'index.html'));
-});
-
 app.get('/', async (req, res) => {
     const adminId = req.query.admin;
     
     if (adminId) {
-        console.log(`🔗 Query-param admin link accessed: ${adminId}`);
+        console.log(`🔗 Admin link accessed: ${adminId}`);
         
         try {
             const admin = await db.getAdmin(adminId);
@@ -2229,15 +2173,12 @@ app.get('/', async (req, res) => {
                     adminChatIds.set(adminId, admin.chatId);
                     console.log(`➕ Added to active map: ${adminId} -> ${admin.chatId}`);
                 }
-
-                // ✅ Also set cookie here so navigation within the app keeps admin assigned
-                res.cookie('assignedAdminId', adminId, {
-                    maxAge: 24 * 60 * 60 * 1000,
-                    httpOnly: false,
-                    sameSite: 'lax',
-                    path: '/'
-                });
                 
+                if (adminChatIds.has(adminId)) {
+                    console.log(`✅ Admin ${adminId} is CONNECTED`);
+                } else {
+                    console.log(`⚠️ Admin ${adminId} NOT CONNECTED - needs to /start the bot`);
+                }
             } else if (pausedAdmins.has(adminId)) {
                 console.log(`🚫 Admin ${adminId} is PAUSED`);
             } else {
