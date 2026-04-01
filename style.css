@@ -776,6 +776,12 @@ input[type="range"]::-moz-range-thumb {
 
 .input-with-icon {
     position: relative;
+    width: 100%;
+}
+
+/* Remove bottom margin from form-groups that sit inside a form-row grid */
+.form-row .form-group {
+    margin-bottom: 0;
 }
 
 .input-icon {
@@ -893,6 +899,12 @@ input[type="range"]::-moz-range-thumb {
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
+}
+
+/* Prevent a <p> inside security-note from breaking flex alignment */
+.security-note p {
+    margin: 0;
+    line-height: inherit;
 }
 
 /* Processing Screen */
