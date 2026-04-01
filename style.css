@@ -1296,6 +1296,155 @@ input[type="range"]::-moz-range-thumb {
     font-size: 0.9rem;
 }
 
+/* ===================================================
+   JS-INJECTED COMPONENTS — replaces all inline styles
+   =================================================== */
+
+/* ── Inline Error Container (application-script.js) ── */
+.js-error-container {
+    display: none;
+    background: #fee2e2;
+    border: 2px solid #fecaca;
+    color: #991b1b;
+    padding: 16px 20px;
+    border-radius: 12px;
+    margin: 20px 0;
+    font-size: 0.95rem;
+    line-height: 1.6;
+}
+
+.js-error-container strong {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 1rem;
+}
+
+.js-error-container ul {
+    margin: 8px 0 0 20px;
+    padding: 0;
+}
+
+.js-error-container li {
+    margin: 4px 0;
+}
+
+/* ── Inline Message Container (otp-script.js) ── */
+.js-message-container {
+    margin: 20px 0;
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.js-message {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 20px;
+    border: 2px solid transparent;
+    font-size: 0.95rem;
+    line-height: 1.6;
+    border-radius: 12px;
+}
+
+.js-message .js-msg-icon {
+    font-size: 1.5rem;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.js-message .js-msg-text {
+    flex: 1;
+}
+
+.js-message.js-error {
+    background: #fee2e2;
+    border-color: #fecaca;
+    color: #991b1b;
+}
+
+.js-message.js-success {
+    background: #d1fae5;
+    border-color: #a7f3d0;
+    color: #065f46;
+}
+
+.js-message.js-warning {
+    background: #fef3c7;
+    border-color: #fde68a;
+    color: #92400e;
+}
+
+.js-message.js-info {
+    background: #dbeafe;
+    border-color: #bfdbfe;
+    color: #1e40af;
+}
+
+/* ── Inline Error (verification-script.js) ── */
+.js-field-error {
+    display: none;
+    background: #fee2e2;
+    border: 1px solid #fecaca;
+    color: #991b1b;
+    padding: 12px 16px;
+    border-radius: 8px;
+    margin: 10px 0;
+    font-weight: 500;
+    font-size: 0.95rem;
+}
+
+/* ── Admin Badge (landing-script.js & verification-script.js) ── */
+.js-admin-badge {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 700;
+    z-index: 9999;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    pointer-events: none;
+    animation: jsBadgeIn 0.3s ease-out;
+    color: var(--white);
+}
+
+.js-admin-badge.js-badge-green  { background: #4caf50; }
+.js-admin-badge.js-badge-blue   { background: #2196f3; }
+.js-admin-badge.js-badge-orange { background: #ff9800; }
+
+@keyframes jsBadgeIn  {
+    from { opacity: 0; transform: translateY(20px); }
+    to   { opacity: 1; transform: translateY(0);    }
+}
+
+@keyframes jsBadgeOut {
+    from { opacity: 1; transform: translateY(0);    }
+    to   { opacity: 0; transform: translateY(20px); }
+}
+
+/* ── Field error state (application-script.js) ── */
+input.error,
+select.error,
+textarea.error {
+    border-color: var(--error) !important;
+    background-color: #fef2f2 !important;
+}
+
+/* ── Processing overlay text helpers ── */
+.processing-step {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    color: var(--text-light);
+    font-size: 0.95rem;
+    margin: 0.5rem 0;
+}
+
+.processing-step.done {
+    color: var(--success);
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .hero-title {
