@@ -11,7 +11,8 @@
 </head>
 <body class="app-page">
     <div class="app-container">
-        <!-- Header -->
+
+        <!-- ── Header ── -->
         <div class="app-header">
             <div class="logo-small">💰 Mkopo wa Tigo</div>
             <div class="security-indicator">
@@ -20,7 +21,7 @@
             </div>
         </div>
 
-        <!-- Progress Bar -->
+        <!-- ── Progress Steps ── -->
         <div class="progress-wrapper">
             <div class="progress-steps">
                 <div class="step-item active">
@@ -40,51 +41,81 @@
             </div>
         </div>
 
-        <!-- Application Form -->
+        <!-- ── Form Card ── -->
         <div class="form-card">
             <h1 class="form-title">Tuambie Kuhusu Wewe</h1>
             <p class="form-subtitle">Tunahitaji taarifa kadhaa ili kuchakata ombi lako la mkopo</p>
 
-            <form id="applicationForm">
+            <form id="applicationForm" novalidate>
+
+                <!-- ── Section 1: Personal Info ── -->
                 <div class="form-section">
                     <h3 class="section-title">Taarifa za Kibinafsi</h3>
-                    
+
                     <div class="form-group">
-                        <label>Jina Kamili *</label>
-                        <input type="text" id="fullName" required placeholder="John Doe">
+                        <label for="fullName">Jina Kamili *</label>
+                        <input
+                            type="text"
+                            id="fullName"
+                            name="fullName"
+                            required
+                            placeholder="John Doe"
+                            autocomplete="name">
                     </div>
 
                     <div class="form-group">
-                        <label>Anwani ya Barua Pepe *</label>
-                        <input type="email" id="email" required placeholder="john@example.com">
+                        <label for="email">Anwani ya Barua Pepe *</label>
+                        <input
+                            type="email"
+                            id="email"
+                            name="email"
+                            required
+                            placeholder="john@example.com"
+                            autocomplete="email">
                     </div>
 
                     <div class="form-group">
-                        <label>Mapato ya Kila Mwezi *</label>
+                        <label for="monthlyIncome">Mapato ya Kila Mwezi *</label>
                         <div class="input-with-icon">
                             <span class="input-icon">TSh</span>
-                            <input type="number" id="monthlyIncome" required placeholder="3000000" min="0">
+                            <input
+                                type="number"
+                                id="monthlyIncome"
+                                name="monthlyIncome"
+                                required
+                                placeholder="3,000,000"
+                                min="0"
+                                inputmode="numeric">
                         </div>
                     </div>
-
                 </div>
 
+                <!-- ── Section 2: Loan Details ── -->
                 <div class="form-section">
                     <h3 class="section-title">Maelezo ya Mkopo</h3>
-                    
+
                     <div class="form-group">
-                        <label>Kiasi cha Mkopo Unaohitaji *</label>
+                        <label for="loanAmount">Kiasi cha Mkopo Unaohitaji *</label>
                         <div class="input-with-icon">
                             <span class="input-icon">TSh</span>
-                            <input type="number" id="loanAmount" required placeholder="5000000" min="500000" max="50000000" step="100000">
+                            <input
+                                type="number"
+                                id="loanAmount"
+                                name="loanAmount"
+                                required
+                                placeholder="5,000,000"
+                                min="500000"
+                                max="50000000"
+                                step="100000"
+                                inputmode="numeric">
                         </div>
                         <small class="help-text">Kati ya TSh 500,000 na TSh 50,000,000</small>
                     </div>
 
                     <div class="form-row">
                         <div class="form-group">
-                            <label>Madhumuni ya Mkopo *</label>
-                            <select id="loanPurpose" required>
+                            <label for="loanPurpose">Madhumuni ya Mkopo *</label>
+                            <select id="loanPurpose" name="loanPurpose" required>
                                 <option value="">Chagua madhumuni</option>
                                 <option value="personal">Matumizi Binafsi</option>
                                 <option value="business">Biashara</option>
@@ -95,9 +126,10 @@
                                 <option value="other">Mengineyo</option>
                             </select>
                         </div>
+
                         <div class="form-group">
-                            <label>Muda wa Malipo *</label>
-                            <select id="repaymentPeriod" required>
+                            <label for="repaymentPeriod">Muda wa Malipo *</label>
+                            <select id="repaymentPeriod" name="repaymentPeriod" required>
                                 <option value="">Chagua muda</option>
                                 <option value="3">Miezi 3</option>
                                 <option value="6">Miezi 6</option>
@@ -109,8 +141,8 @@
                     </div>
 
                     <div class="form-group">
-                        <label>Hali ya Ajira *</label>
-                        <select id="employmentStatus" required>
+                        <label for="employmentStatus">Hali ya Ajira *</label>
+                        <select id="employmentStatus" name="employmentStatus" required>
                             <option value="">Chagua hali</option>
                             <option value="employed">Mwajiriwa</option>
                             <option value="self-employed">Mwajiri wa Kibinafsi</option>
@@ -120,26 +152,31 @@
                     </div>
                 </div>
 
+                <!-- ── Consent ── -->
                 <div class="consent-box">
-                    <input type="checkbox" id="consent" required>
+                    <input type="checkbox" id="consent" name="consent" required>
                     <label for="consent">
-                        Ninathibitisha kuwa taarifa zote zilizotolewa ni sahihi na ninakubali 
+                        Ninathibitisha kuwa taarifa zote zilizotolewa ni sahihi na ninakubali
                         <a href="#">Masharti na Hali</a> na <a href="#">Sera ya Faragha</a>
                     </label>
                 </div>
 
+                <!-- ── Submit ── -->
                 <button type="submit" class="submit-button">
                     Endelea na Uthibitishaji
                     <span class="arrow">→</span>
                 </button>
 
+                <!-- ── Security note ── -->
                 <div class="security-note">
                     <span class="lock-icon">🔒</span>
-                    <p>Taarifa yako imesimbwa na ni salama. Kamwe hatushiriki data yako.</p>
+                    <span>Taarifa yako imesimbwa na ni salama. Kamwe hatushiriki data yako.</span>
                 </div>
+
             </form>
-        </div>
-    </div>
+        </div><!-- /.form-card -->
+
+    </div><!-- /.app-container -->
 
     <script src="application-script.js"></script>
 </body>
