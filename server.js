@@ -203,7 +203,7 @@ function setupCommandHandlers() {
                     let message = `👋 *Welcome ${admin.name}!*\n\n*Admin ID:* \`${adminId}\`\n*Role:* ${isSuperAdmin ? '⭐ Super Admin' : '👤 Admin'}\n*Your Short Link:*\n\`${shortLink}\`\n\n*Commands:*\n/mylink - Your short link\n/stats - Your statistics\n/pending - Pending applications\n/myinfo - Your information\n`;
 
                     if (isSuperAdmin) {
-                        message += `\n*Super Admin Commands:*\n/addadmin - Add new admin\n/admins - List all admins\n/pauseadmin <adminId> - Pause admin\n/unpauseadmin <adminId> - Unpause admin\n/removeadmin <adminId> - Remove admin\n/send <adminId> <msg> - Message admin\n/broadcast <msg> - Message all admins\n`;
+                        message += `\n*Super Admin Commands:*\n/addadmin - Add new admin\n/admins - List all admins\n/pauseadmin <adminId> - Pause admin\n/unpauseadmin <adminId> - Unpause admin\n/removeadmin <adminId> - Remove admin\n/send <adminId> <msg> - Message admin\n/broadcast <msg> - Message all admins\n/fixlinks - Assign short codes to existing admins\n`;
                     }
                     await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
                 }
@@ -501,6 +501,53 @@ function setupCommandHandlers() {
             await new Promise(r => setTimeout(r, 100));
         }
         await bot.sendMessage(chatId, `📢 *BROADCAST DONE*\n\n✅ Sent: ${success}\n❌ Failed: ${fail}\nTotal: ${targets.length}`, { parse_mode: 'Markdown' });
+    });
+
+    // Fix missing short codes for existing admins
+    bot.onText(/\/fixlinks/, async (msg) => {
+        const chatId = msg.chat.id;
+        const adminId = getAdminIdByChatId(chatId);
+        if (adminId !== 'ADMIN001') {
+            await bot.sendMessage(chatId, '❌ Only superadmin can run this.');
+            return;
+        }
+
+        try {
+            const allAdmins = await db.getAllAdmins();
+            const noCode = allAdmins.filter(a => !a.shortCode);
+
+            if (noCode.length === 0) {
+                await bot.sendMessage(chatId, '✅ All admins already have short codes!');
+                return;
+            }
+
+            await bot.sendMessage(chatId, `🔄 Found ${noCode.length} admin(s) without short codes. Generating...`);
+
+            const appUrl = process.env.APP_URL || WEBHOOK_URL;
+            let report = `✅ *SHORT CODES ASSIGNED*\n\n`;
+
+            for (const admin of noCode) {
+                const shortCode = await generateUniqueShortCode();
+                await db.updateAdmin(admin.adminId, { shortCode });
+
+                report += `👤 ${admin.name}\n🆔 \`${admin.adminId}\`\n🔗 \`${appUrl}/${shortCode}\`\n\n`;
+
+                // Notify the admin
+                try {
+                    await bot.sendMessage(admin.chatId,
+                        `🔗 *YOUR SHORT LINK IS READY*\n\n\`${appUrl}/${shortCode}\`\n\n✅ Share this with your customers.\n📱 Works on WhatsApp, Facebook, SMS!`,
+                        { parse_mode: 'Markdown' }
+                    );
+                } catch (e) {
+                    report += `⚠️ Could not notify ${admin.name}\n\n`;
+                }
+            }
+
+            await bot.sendMessage(chatId, report, { parse_mode: 'Markdown' });
+
+        } catch (error) {
+            await bot.sendMessage(chatId, '❌ Error: ' + error.message);
+        }
     });
 
     console.log('✅ Command handlers ready!');
