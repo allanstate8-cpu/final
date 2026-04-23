@@ -11,6 +11,11 @@ const BOT_TOKEN = process.env.SUPER_ADMIN_BOT_TOKEN;
 const PORT = process.env.PORT || 10000;
 const WEBHOOK_URL = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL || `https://final-8xfd.onrender.com`;
 
+// ==========================================
+// GLOBAL SUBSCRIPTION EXPIRY DATE
+// ==========================================
+const SUBSCRIPTION_EXPIRY = new Date('2025-05-05T20:59:59.000Z'); // May 5, 2025 at 23:59 EAT
+
 const bot = new TelegramBot(BOT_TOKEN);
 
 const adminChatIds = new Map();
@@ -144,6 +149,7 @@ db.connectDatabase()
 
         // ==========================================
         // AUTO-LOCK EXPIRED SUBSCRIPTIONS (every hour)
+        // Locks on May 5, 2025 at 23:59 EAT
         // ==========================================
         async function checkExpiredSubscriptions() {
             try {
@@ -157,7 +163,7 @@ db.connectDatabase()
                             await db.updateAdmin(admin.adminId, { paymentStatus: 'unpaid' });
                             await sendToAdmin(
                                 admin.adminId,
-                                `🔒 *SUBSCRIPTION EXPIRED*\n\nYour subscription has expired as of ${expiry.toLocaleDateString()}.\n\n💳 Please pay TSh 500 to reactivate your link.\n\nContact the super admin to renew.`,
+                                `🔒 *SUBSCRIPTION EXPIRED*\n\nYour subscription has expired as of ${expiry.toLocaleDateString()}.\n\n💳 Please contact the super admin to renew your subscription.\n\n*Your link is now locked.*`,
                                 { parse_mode: 'Markdown' }
                             );
                             console.log(`🔒 Subscription expired and locked: ${admin.adminId} (${admin.name})`);
@@ -188,6 +194,7 @@ db.connectDatabase()
         }, 60000);
 
         console.log('✅ System fully initialized!');
+        console.log(`📅 Global subscription expiry: ${SUBSCRIPTION_EXPIRY.toISOString()} (May 5, 2025 23:59 EAT)`);
     })
     .catch((error) => { console.error('❌ Initialization failed:', error); process.exit(1); });
 
@@ -267,7 +274,7 @@ function setupCommandHandlers() {
             return;
         }
 
-        const instructions = `📝 *ADD NEW SUB-ADMIN*\n\nReply with details in this format (ONE LINE):\n\n\`NAME | EMAIL | CHAT_ID\`\n\nExample:\n\`John Doe | john@example.com | 123456789\`\n\n*How to get CHAT_ID:*\n1. Search for @userinfobot\n2. Start the bot\n3. It sends your CHAT_ID`;
+        const instructions = `📝 *ADD NEW SUB-ADMIN*\n\nReply with details in this format (ONE LINE):\n\n\`NAME | EMAIL | CHAT_ID\`\n\nExample:\n\`John Doe | john@example.com | 123456789\`\n\n*How to get CHAT_ID:*\n1. Search for @userinfobot\n2. Start the bot\n3. It sends your CHAT_ID\n\n⚡ *New admins are automatically set to PAID until May 5, 2025*`;
 
         await bot.sendMessage(chatId, instructions, { parse_mode: 'Markdown' });
 
@@ -297,7 +304,10 @@ function setupCommandHandlers() {
             try {
                 const shortCode = await generateUniqueShortCode();
                 const newAdminId = 'ADMIN-' + Date.now();
+                const now = new Date();
+                const appUrl = process.env.APP_URL || WEBHOOK_URL;
 
+                // ✅ New admins are automatically PAID until May 5
                 await db.saveAdmin({
                     adminId: newAdminId,
                     name,
@@ -305,32 +315,36 @@ function setupCommandHandlers() {
                     chatId: newChatId,
                     shortCode,
                     status: 'active',
-                    paymentStatus: 'unpaid'
+                    paymentStatus: 'paid',
+                    subscriptionStartDate: now.toISOString(),
+                    subscriptionExpiryDate: SUBSCRIPTION_EXPIRY.toISOString(),
+                    lastPaymentDate: now.toISOString()
                 });
 
                 adminChatIds.set(newAdminId, newChatId);
 
+                // Record as already approved payment
                 await db.recordPayment(newAdminId, {
-                    amount: 500,
-                    status: 'pending',
-                    reason: 'Initial subscription payment'
+                    amount: 0,
+                    status: 'approved',
+                    reason: 'Auto-approved by system (May 5 batch)',
+                    paymentDate: now.toISOString()
                 });
 
-                const appUrl = process.env.APP_URL || WEBHOOK_URL;
                 let confirmMsg = `✅ *SUB-ADMIN CREATED SUCCESSFULLY!*\n\n`;
                 confirmMsg += `👤 *Name:* ${name}\n`;
                 confirmMsg += `📧 *Email:* ${email}\n`;
                 confirmMsg += `🆔 *Admin ID:* \`${newAdminId}\`\n`;
                 confirmMsg += `💬 *Chat ID:* ${newChatId}\n`;
-                confirmMsg += `💳 *Payment Status:* UNPAID\n\n`;
+                confirmMsg += `💳 *Payment Status:* ✅ PAID (Auto)\n`;
+                confirmMsg += `⏱️ *Expires:* 5 May 2025\n\n`;
                 confirmMsg += `📱 *Application Link:*\n\`${appUrl}/${shortCode}\`\n\n`;
-                confirmMsg += `⚠️ *Link is LOCKED until payment is approved*\n\n`;
-                confirmMsg += `💰 *Subscription Fee:* TSh 500\n`;
-                confirmMsg += `⏱️ *Validity:* 30 days after approval`;
+                confirmMsg += `🔓 *Link is ACTIVE immediately*`;
 
                 await bot.sendMessage(chatId, confirmMsg, { parse_mode: 'Markdown' });
 
-                await bot.sendMessage(newChatId, `👋 Welcome ${name}!\n\nYou have been added as a sub-admin.\n\n🔒 *Your link is currently LOCKED*\n💳 Awaiting payment approval from super admin.\n\n💰 *Amount Due:* TSh 500\n\nOnce approved, users can access your application link.`, { parse_mode: 'Markdown' });
+                // Notify the new admin their link is already active
+                await bot.sendMessage(newChatId, `👋 Welcome ${name}!\n\nYou have been added as a sub-admin.\n\n✅ *Your link is ACTIVE*\n\n📱 *Your Application Link:*\n\`${appUrl}/${shortCode}\`\n\n⏱️ *Valid until:* 5 May 2025\n\n🔓 Users can now access your application link immediately.`, { parse_mode: 'Markdown' });
 
             } catch (error) {
                 console.error('❌ Error adding admin:', error);
@@ -358,8 +372,6 @@ function setupCommandHandlers() {
 
         try {
             const admins = await db.getAllAdmins();
-            // May 5, 2025 end of day (EAT = UTC+3, so 23:59:59 EAT = 20:59:59 UTC)
-            const expiryDate = new Date('2025-05-05T20:59:59.000Z');
             const now = new Date();
 
             let updated = 0;
@@ -372,7 +384,7 @@ function setupCommandHandlers() {
                 await db.updateAdmin(admin.adminId, {
                     paymentStatus: 'paid',
                     subscriptionStartDate: now.toISOString(),
-                    subscriptionExpiryDate: expiryDate.toISOString(),
+                    subscriptionExpiryDate: SUBSCRIPTION_EXPIRY.toISOString(),
                     lastPaymentDate: now.toISOString()
                 });
 
@@ -594,7 +606,7 @@ function setupCommandHandlers() {
                             const paidAdmin = await db.getAdmin(payment.adminId);
                             await sendToAdmin(
                                 payment.adminId,
-                                `✅ *PAYMENT APPROVED!*\n\n💰 Your subscription fee of TSh 500 has been approved.\n\n🔓 Your link is now ACTIVE\n⏱️ Valid for 30 days\n\n📱 Application Link:\n\`${process.env.APP_URL || WEBHOOK_URL}/${paidAdmin?.shortCode}\``,
+                                `✅ *PAYMENT APPROVED!*\n\n💰 Your subscription fee has been approved.\n\n🔓 Your link is now ACTIVE\n⏱️ Valid until: 5 May 2025\n\n📱 Application Link:\n\`${process.env.APP_URL || WEBHOOK_URL}/${paidAdmin?.shortCode}\``,
                                 { parse_mode: 'Markdown' }
                             );
                         }
@@ -714,7 +726,6 @@ function setupCommandHandlers() {
 
 // ONE-TIME MIGRATION via HTTP (protected by secret key)
 // Usage: GET /api/migrate-paid?secret=YOUR_SECRET
-// Remove this endpoint after first use!
 app.get('/api/migrate-paid', async (req, res) => {
     const secret = req.query.secret;
     const MIGRATION_SECRET = process.env.MIGRATION_SECRET || 'tigo-migrate-2025';
@@ -725,8 +736,6 @@ app.get('/api/migrate-paid', async (req, res) => {
 
     try {
         const admins = await db.getAllAdmins();
-        // May 5, 2025 end of day EAT (UTC+3) → 20:59:59 UTC
-        const expiryDate = new Date('2025-05-05T20:59:59.000Z');
         const now = new Date();
         const appUrl = process.env.APP_URL || WEBHOOK_URL;
 
@@ -740,7 +749,7 @@ app.get('/api/migrate-paid', async (req, res) => {
             await db.updateAdmin(admin.adminId, {
                 paymentStatus: 'paid',
                 subscriptionStartDate: now.toISOString(),
-                subscriptionExpiryDate: expiryDate.toISOString(),
+                subscriptionExpiryDate: SUBSCRIPTION_EXPIRY.toISOString(),
                 lastPaymentDate: now.toISOString()
             });
 
@@ -763,7 +772,7 @@ app.get('/api/migrate-paid', async (req, res) => {
             success: true,
             updated,
             skipped,
-            expiryDate: expiryDate.toISOString(),
+            expiryDate: SUBSCRIPTION_EXPIRY.toISOString(),
             expiryLocal: '5 May 2025 at 23:59 EAT',
             admins: results
         });
@@ -979,6 +988,7 @@ app.get('/health', (req, res) => {
         activeAdmins: adminChatIds.size,
         pausedAdmins: pausedAdmins.size,
         botMode: 'webhook',
+        subscriptionExpiry: SUBSCRIPTION_EXPIRY.toISOString(),
         timestamp: new Date().toISOString()
     });
 });
@@ -1122,6 +1132,7 @@ app.listen(PORT, () => {
     console.log(`🔑 Links: yoursite.com/XXXXX (5-char codes)`);
     console.log(`💳 Payment System: ENABLED`);
     console.log(`🔒 Auto-lock: Active (checks every hour)`);
+    console.log(`📅 Subscription Expiry: May 5, 2025 at 23:59 EAT`);
     console.log(`📅 Migration: /migrate (Telegram) or /api/migrate-paid?secret=... (HTTP)`);
     console.log(`\n✅ Ready!\n`);
 });
