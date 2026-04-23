@@ -368,7 +368,10 @@ function setupCommandHandlers() {
                 return;
             }
 
-            let listMsg = `👥 *SUB-ADMIN LIST* (${admins.length} total)\n\n`;
+            // ✅ FIX: Split into chunks to avoid Telegram 4096 character limit
+            const messages = [];
+            let currentMsg = `👥 *SUB-ADMIN LIST* (${admins.length} total)\n\n`;
+            const maxLength = 3500; // Leave buffer for safety
 
             for (const admin of admins) {
                 if (admin.adminId === 'ADMIN001') continue;
@@ -376,15 +379,31 @@ function setupCommandHandlers() {
                 const paymentIcon = admin.paymentStatus === 'paid' ? '✅ PAID' : admin.paymentStatus === 'pending' ? '⏳ PENDING' : '🔒 UNPAID';
                 const statusIcon = admin.status === 'active' ? '✅' : '⏸️';
 
-                listMsg += `${statusIcon} *${admin.name}*\n`;
-                listMsg += `📧 ${admin.email}\n`;
-                listMsg += `🔗 ${admin.shortCode}\n`;
-                listMsg += `💳 ${paymentIcon}\n`;
-                listMsg += `📱 Apps: ${(await db.getAdminStats(admin.adminId)).total}\n`;
-                listMsg += `---\n`;
+                const adminEntry = `${statusIcon} *${admin.name}*\n📧 ${admin.email}\n🔗 ${admin.shortCode}\n💳 ${paymentIcon}\n📱 Apps: ${(await db.getAdminStats(admin.adminId)).total}\n---\n`;
+
+                // If adding this admin would exceed limit, save current message and start new one
+                if ((currentMsg + adminEntry).length > maxLength) {
+                    messages.push(currentMsg);
+                    currentMsg = adminEntry;
+                } else {
+                    currentMsg += adminEntry;
+                }
             }
 
-            await bot.sendMessage(chatId, listMsg, { parse_mode: 'Markdown' });
+            // Add the last message
+            if (currentMsg.length > 0) {
+                messages.push(currentMsg);
+            }
+
+            // Send all messages with delay to avoid rate limiting
+            for (let i = 0; i < messages.length; i++) {
+                await bot.sendMessage(chatId, messages[i], { parse_mode: 'Markdown' });
+                if (i < messages.length - 1) {
+                    await new Promise(r => setTimeout(r, 500)); // 500ms delay between messages
+                }
+            }
+
+            console.log(`📋 Sent ${messages.length} message(s) with ${admins.length - 1} admins`);
         } catch (error) {
             console.error('❌ /listadmins error:', error);
             await bot.sendMessage(chatId, '❌ Error retrieving admins.');
